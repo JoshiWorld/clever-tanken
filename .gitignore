@@ -144,6 +144,8 @@ ENV/
 env.bak/
 venv.bak/
 
+prices.csv
+
 # Spyder project settings
 .spyderproject
 .spyproject

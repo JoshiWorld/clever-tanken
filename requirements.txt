@@ -1,0 +1,18 @@
+# Fetch Tankpreise (Clever-Tanken)
+requests>=2.28
+
+# InfluxDB 3 und Daten
+influxdb3-python>=0.18.0
+pandas>=2.0
+pyarrow>=14.0
+
+# ML-Training und Vorhersage
+scikit-learn>=1.3
+numpy>=1.24
+joblib>=1.3
+
+# Optional: TLS auf Windows (gRPC)
+certifi>=2023.0
+
+# Optional: Umgebungsvariablen aus .env
+python-dotenv>=1.0
