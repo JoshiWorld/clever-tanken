@@ -60,6 +60,9 @@ INFLUX_FUEL_TYPE_COL = os.getenv("INFLUX_FUEL_TYPE_COL", "fuel_type")  # z. B. "
 STATIONS_BASE_DIR = Path(os.getenv("STATIONS_BASE_DIR", "stations"))
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "168"))  # 7 Tage
 PREDICT_HORIZON_HOURS = int(os.getenv("PREDICT_HORIZON_HOURS", "24"))
+# 10-Minuten-Vorhersage: Lookback 24 h in 10-min-Schritten = 144 Perioden, Horizont 1 (nächster 10-min-Preis)
+PREDICT_INTERVAL_MINUTES = int(os.getenv("PREDICT_INTERVAL_MINUTES", "10"))
+LOOKBACK_PERIODS_10MIN = 24 * 60 // PREDICT_INTERVAL_MINUTES  # 144
 # Standard-Historie für Training (Stunden). None = so viel wie nötig; 2 Jahre = 17520
 DEFAULT_TRAINING_HOURS = int(os.getenv("DEFAULT_TRAINING_HOURS", "17520"))
 
@@ -198,47 +201,85 @@ def build_features(
     lookback_hours: int = LOOKBACK_HOURS,
     horizon_hours: int = PREDICT_HORIZON_HOURS,
     resample_rule: str = "1h",
+    lookback_periods: int | None = None,
+    horizon_periods: int | None = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """
     Erstellt Lag- und Rollings-Features aus der Preis-Zeitreihe.
 
-    - Resample auf stündliche Werte (oder resample_rule).
-    - Lags und Rolling-Metriken als Features, nächster Durchschnittspreis als Ziel.
+    - Bei resample_rule="10min" und lookback_periods/horizon_periods: Vorhersage des
+      nächsten 10-Min-Preises (ein Schritt), Lookback 144 Perioden (24 h).
+      Zusätzliche Features für plötzliche Niveauänderungen (z. B. Krisen): recent_mean_6,
+      level_shift_6_24, level_shift_24_72, recent_max_24, recent_min_24 – damit die KI
+      bei stark gestiegenen Preisen der letzten 24 h das neue Niveau vorhersagt.
+    - Sonst: stündliches Resample, Lags + Rolling, Ziel = Ø-Preis über horizon_hours.
     """
     df = df.set_index("time").sort_index()
     if "price" not in df.columns:
         raise ValueError("DataFrame muss eine Spalte 'price' haben.")
     series = df["price"].resample(resample_rule).mean().ffill().bfill()
 
-    # Fenster in Perioden (z. B. Stunden)
+    use_10min = lookback_periods is not None and horizon_periods is not None
+    if use_10min:
+        lb, hor = lookback_periods, horizon_periods
+        lags = list(range(1, lb + 1))
+        X_list = []
+        y_list = []
+        index_list = []
+        for i in range(lb, len(series) - hor):
+            window = series.iloc[i - lb : i]
+            row = {}
+            for lag in lags:
+                if lag <= len(window):
+                    row[f"lag_{lag}"] = window.iloc[-lag]
+            if len(window) >= 24:
+                row["rolling_mean_24"] = window.tail(24).mean()
+                row["rolling_std_24"] = window.tail(24).std()
+            if len(window) >= 72:
+                row["rolling_mean_72"] = window.tail(72).mean()
+                row["rolling_std_72"] = window.tail(72).std()
+            # Aktuelles Niveau und plötzliche Schocks (z. B. Krisen): letzte 1h stark gewichten
+            if len(window) >= 6:
+                row["recent_mean_6"] = window.tail(6).mean()
+            if len(window) >= 24:
+                # Niveauverschiebung: letzte 1h vs. 3h davor – erkennt plötzliche Sprünge
+                row["level_shift_6_24"] = window.tail(6).mean() - window.iloc[-24:-6].mean()
+            if len(window) >= 72:
+                # Längerer Schock: letzte 4h vs. 8h davor – neues Niveau bleibt erhalten
+                row["level_shift_24_72"] = window.tail(24).mean() - window.iloc[-72:-24].mean()
+            if len(window) >= 24:
+                row["recent_max_24"] = window.tail(24).max()
+                row["recent_min_24"] = window.tail(24).min()
+            target = series.iloc[i]
+            X_list.append(row)
+            y_list.append(target)
+            index_list.append(series.index[i])
+        feature_df = pd.DataFrame(X_list).ffill().fillna(0)
+        target_series = pd.Series(y_list, index=index_list)
+        return feature_df, target_series
+
     lookback = lookback_hours
     horizon = horizon_hours
-
-    # Features: Lags 1..lookback (stündlich), dann Rolling Mean/Std
-    lags = list(range(1, min(lookback + 1, 168)))  # max 168 Lags (1 Woche stündlich)
+    lags = list(range(1, min(lookback + 1, 168)))
     X_list = []
     y_list = []
     index_list = []
-
     for i in range(lookback, len(series) - horizon):
         window = series.iloc[i - lookback : i]
         row = {}
         for lag in lags:
             if lag <= len(window):
                 row[f"lag_{lag}"] = window.iloc[-lag]
-        # Rolling-Statistiken (z. B. 24h, 168h)
         if len(window) >= 24:
             row["rolling_mean_24"] = window.tail(24).mean()
             row["rolling_std_24"] = window.tail(24).std()
         if len(window) >= 168:
             row["rolling_mean_168"] = window.tail(168).mean()
             row["rolling_std_168"] = window.tail(168).std()
-        # Ziel: Durchschnittspreis über den nächsten horizon
         target = series.iloc[i : i + horizon].mean()
         X_list.append(row)
         y_list.append(target)
         index_list.append(series.index[i])
-
     feature_df = pd.DataFrame(X_list).ffill().fillna(0)
     target_series = pd.Series(y_list, index=index_list)
     return feature_df, target_series
@@ -280,11 +321,13 @@ def save_artifact(
     model: GradientBoostingRegressor,
     feature_names: list[str],
     metrics: dict,
-    lookback_hours: int,
-    horizon_hours: int,
-    resample_rule: str,
     station_id: int | str,
     fuel_type: str,
+    resample_rule: str,
+    lookback_hours: int | None = None,
+    horizon_hours: int | None = None,
+    lookback_periods: int | None = None,
+    horizon_periods: int | None = None,
 ) -> Path:
     """Speichert Modell und Metadaten unter stations/<station_id>/<fuel_type>/."""
     out_dir = station_model_dir(station_id, fuel_type)
@@ -297,12 +340,16 @@ def save_artifact(
         "station_id": str(station_id),
         "fuel_type": fuel_type,
         "feature_names": feature_names,
-        "lookback_hours": lookback_hours,
-        "horizon_hours": horizon_hours,
         "resample_rule": resample_rule,
         "metrics": metrics,
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
+    if lookback_periods is not None:
+        meta["lookback_periods"] = lookback_periods
+        meta["horizon_periods"] = horizon_periods or 1
+    if lookback_hours is not None:
+        meta["lookback_hours"] = lookback_hours
+        meta["horizon_hours"] = horizon_hours or 24
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
     return model_path
@@ -311,7 +358,7 @@ def save_artifact(
 def run_training(
     hours: int | None = None,
     test_size: float = 0.2,
-    resample_rule: str = "1h",
+    resample_rule: str = "10min",
     station_id: int | str | None = None,
     fuel_type: str | None = None,
 ) -> None:
@@ -345,18 +392,28 @@ def run_training(
         if (out_dir / "tankpreis_model.joblib").exists():
             print("  Bestehendes Modell gefunden → wird mit allen Daten aus Influx neu trainiert (inkl. neuer Punkte).")
         df = load_tankpreise_from_influx(station_id=sid, fuel_type=ftype, hours=hours)
-        if df.empty or len(df) < LOOKBACK_HOURS + PREDICT_HORIZON_HOURS:
+        use_10min = resample_rule.strip().lower() == "10min"
+        min_points = (LOOKBACK_PERIODS_10MIN + 200) if use_10min else (LOOKBACK_HOURS + PREDICT_HORIZON_HOURS)
+        if df.empty or len(df) < min_points:
             print(f"  Übersprungen: zu wenig Daten ({len(df)} Punkte).")
             continue
 
         print(f"  Geladene Daten: {len(df)} Punkte (Zeitraum: {hours} Stunden)")
         print("  Erstelle Features …")
-        X, y = build_features(
-            df,
-            lookback_hours=LOOKBACK_HOURS,
-            horizon_hours=PREDICT_HORIZON_HOURS,
-            resample_rule=resample_rule,
-        )
+        if use_10min:
+            X, y = build_features(
+                df,
+                resample_rule=resample_rule,
+                lookback_periods=LOOKBACK_PERIODS_10MIN,
+                horizon_periods=1,
+            )
+        else:
+            X, y = build_features(
+                df,
+                lookback_hours=LOOKBACK_HOURS,
+                horizon_hours=PREDICT_HORIZON_HOURS,
+                resample_rule=resample_rule,
+            )
         if X.empty or len(X) < 20:
             print("  Übersprungen: zu wenig Samples nach Feature-Erstellung.")
             continue
@@ -366,16 +423,28 @@ def run_training(
         model, metrics = train_model(X, y, test_size=test_size)
         print(f"  MAE:  {metrics['mae']:.4f}  RMSE: {metrics['rmse']:.4f}")
 
-        path = save_artifact(
-            model,
-            feature_names=list(X.columns),
-            metrics=metrics,
-            lookback_hours=LOOKBACK_HOURS,
-            horizon_hours=PREDICT_HORIZON_HOURS,
-            resample_rule=resample_rule,
-            station_id=sid,
-            fuel_type=ftype,
-        )
+        if use_10min:
+            path = save_artifact(
+                model,
+                feature_names=list(X.columns),
+                metrics=metrics,
+                station_id=sid,
+                fuel_type=ftype,
+                resample_rule=resample_rule,
+                lookback_periods=LOOKBACK_PERIODS_10MIN,
+                horizon_periods=1,
+            )
+        else:
+            path = save_artifact(
+                model,
+                feature_names=list(X.columns),
+                metrics=metrics,
+                station_id=sid,
+                fuel_type=ftype,
+                resample_rule=resample_rule,
+                lookback_hours=LOOKBACK_HOURS,
+                horizon_hours=PREDICT_HORIZON_HOURS,
+            )
         print(f"  Modell gespeichert: {path.parent}")
 
 
@@ -396,8 +465,8 @@ def main():
     parser.add_argument(
         "--resample",
         type=str,
-        default="1h",
-        help="Pandas-Resample-Regel für Zeitreihe (default: 1h)",
+        default="10min",
+        help="Resample-Regel: 10min = 144-Schritt-Vorhersage (nächste 24 h alle 10 min), 1h = 24h-Durchschnitt (default: 10min)",
     )
     parser.add_argument(
         "--station-id",
@@ -423,6 +492,42 @@ def main():
     )
 
 
+def _build_feature_row(window: np.ndarray, feature_names: list[str]) -> pd.DataFrame:
+    """Baut eine Zeile Features aus einem Fenster (für Vorhersage)."""
+    row = {}
+    for name in feature_names:
+        if name.startswith("lag_"):
+            lag = int(name.split("_")[1])
+            if lag <= len(window):
+                row[name] = window[-lag]
+        elif name == "rolling_mean_24" and len(window) >= 24:
+            row[name] = np.mean(window[-24:])
+        elif name == "rolling_std_24" and len(window) >= 24:
+            row[name] = np.std(window[-24:]) or 0.0
+        elif name == "rolling_mean_72" and len(window) >= 72:
+            row[name] = np.mean(window[-72:])
+        elif name == "rolling_std_72" and len(window) >= 72:
+            row[name] = np.std(window[-72:]) or 0.0
+        elif name == "rolling_mean_168" and len(window) >= 168:
+            row[name] = np.mean(window[-168:])
+        elif name == "rolling_std_168" and len(window) >= 168:
+            row[name] = np.std(window[-168:]) or 0.0
+        elif name == "recent_mean_6" and len(window) >= 6:
+            row[name] = np.mean(window[-6:])
+        elif name == "level_shift_6_24" and len(window) >= 24:
+            row[name] = np.mean(window[-6:]) - np.mean(window[-24:-6])
+        elif name == "level_shift_24_72" and len(window) >= 72:
+            row[name] = np.mean(window[-24:]) - np.mean(window[-72:-24])
+        elif name == "recent_max_24" and len(window) >= 24:
+            row[name] = np.max(window[-24:])
+        elif name == "recent_min_24" and len(window) >= 24:
+            row[name] = np.min(window[-24:])
+    for name in feature_names:
+        if name not in row:
+            row[name] = 0.0
+    return pd.DataFrame([row])[feature_names]
+
+
 def predict_from_current_prices(
     aktuelle_tankpreise: list[float] | np.ndarray | pd.Series,
     station_id: int | str | None = None,
@@ -434,16 +539,7 @@ def predict_from_current_prices(
 
     Lädt das Modell für die angegebene Tankstelle und Kraftstoffsorte aus
     stations/<station_id>/<fuel_type>/ und liefert die prognostizierte Preishöhe.
-
-    Args:
-        aktuelle_tankpreise: Zeitreihe der letzten Preise (ältester zuerst).
-        station_id: Tankstellen-ID (z. B. 993).
-        fuel_type: Kraftstoffsorte (z. B. "ARAL Ultimate 102").
-        model_dir: Optional: Ordner mit tankpreis_model.joblib und tankpreis_meta.json
-                   (überschreibt station_id/fuel_type).
-
-    Returns:
-        Vorhergesagter (Durchschnitts-)Preis für den konfigurierten Horizont.
+    Unterstützt sowohl 1h-Modell (lookback_hours) als auch 10min-Modell (lookback_periods).
     """
     if model_dir is not None:
         base_dir = Path(model_dir)
@@ -461,7 +557,7 @@ def predict_from_current_prices(
         meta = json.load(f)
     model = joblib.load(model_path)
     feature_names = meta["feature_names"]
-    lookback = meta["lookback_hours"]
+    lookback = meta.get("lookback_periods") or meta.get("lookback_hours")
 
     prices = np.asarray(aktuelle_tankpreise).ravel()
     if len(prices) < lookback:
@@ -469,26 +565,51 @@ def predict_from_current_prices(
             f"Mindestens {lookback} Preispunkte nötig, erhalten: {len(prices)}"
         )
     window = prices[-lookback:]
-
-    row = {}
-    for i, name in enumerate(feature_names):
-        if name.startswith("lag_"):
-            lag = int(name.split("_")[1])
-            if lag <= len(window):
-                row[name] = window[-lag]
-        elif name == "rolling_mean_24" and len(window) >= 24:
-            row[name] = np.mean(window[-24:])
-        elif name == "rolling_std_24" and len(window) >= 24:
-            row[name] = np.std(window[-24:]) or 0.0
-        elif name == "rolling_mean_168" and len(window) >= 168:
-            row[name] = np.mean(window[-168:])
-        elif name == "rolling_std_168" and len(window) >= 168:
-            row[name] = np.std(window[-168:]) or 0.0
-    for name in feature_names:
-        if name not in row:
-            row[name] = 0.0
-    X = pd.DataFrame([row])[feature_names]
+    X = _build_feature_row(window, feature_names)
     return float(model.predict(X)[0])
+
+
+def predict_next_144_steps(
+    history_prices: list[float] | np.ndarray | pd.Series,
+    station_id: int | str,
+    fuel_type: str,
+    num_steps: int = 144,
+) -> list[float]:
+    """
+    Nächste 144 Preise im 10-Minuten-Takt (24 h) durch iteratives Vorhersagen.
+
+    Das Modell muss im 10min-Modus trainiert sein (lookback_periods=144).
+    history_prices = letzte 24 h in 10-min-Auflösung (mind. 144 Punkte).
+    """
+    base_dir = station_model_dir(station_id, fuel_type)
+    model_path = base_dir / "tankpreis_model.joblib"
+    meta_path = base_dir / "tankpreis_meta.json"
+    if not model_path.exists() or not meta_path.exists():
+        raise FileNotFoundError(
+            f"Modell nicht gefunden in {base_dir}. Mit --resample 10min trainieren."
+        )
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    if "lookback_periods" not in meta:
+        raise ValueError(
+            "Modell ist kein 10min-Modell. Bitte mit python train.py --resample 10min neu trainieren."
+        )
+    model = joblib.load(model_path)
+    feature_names = meta["feature_names"]
+    lookback = meta["lookback_periods"]
+    prices = np.asarray(history_prices).ravel()
+    if len(prices) < lookback:
+        raise ValueError(
+            f"Mindestens {lookback} Preispunkte (24 h in 10-min) nötig, erhalten: {len(prices)}"
+        )
+    window = list(prices[-lookback:])
+    predictions = []
+    for _ in range(num_steps):
+        X = _build_feature_row(np.array(window), feature_names)
+        pred = float(model.predict(X)[0])
+        predictions.append(pred)
+        window = window[1:] + [pred]
+    return predictions
 
 
 if __name__ == "__main__":

@@ -16,3 +16,7 @@ certifi>=2023.0
 
 # Optional: Umgebungsvariablen aus .env
 python-dotenv>=1.0
+
+# API & Frontend
+fastapi>=0.109
+uvicorn[standard]>=0.27

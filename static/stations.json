@@ -1,0 +1,18 @@
+[
+  {
+    "id": 993,
+    "name": "ARAL Tankstelle",
+    "standort": "Clever-Tanken Station 993",
+    "adresse": "Am Leineufer 52",
+    "plz": "30419",
+    "ort": "Hannover"
+  },
+  {
+    "id": 30948,
+    "name": "HEM Tankstelle",
+    "standort": "Clever-Tanken Station 30948",
+    "adresse": "Bremer Str. 69",
+    "plz": "30826",
+    "ort": "Garbsen"
+  }
+]
