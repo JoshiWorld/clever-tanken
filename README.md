@@ -170,6 +170,36 @@ oder per Umgebungsvariable auf dem Server: `INFLUXDB3_QUERY_FILE_LIMIT=2000`.
 
 ---
 
+## FAQ
+
+### Was passiert beim Training und bei der Vorhersage?
+
+1. **Daten** werden aus InfluxDB geladen (Zeitstempel + Preis pro Station/Kraftstoff).
+2. **Aufbereitung:** Resampling auf 10-Minuten-Intervalle; für jeden Zeitpunkt wird ein **Eingabefenster** aus den letzten **144 Zeitschritten** (24 h) gebaut, plus Zusatzfeatures (Lags, Rolling-Mittel/Std, Schock-Features, Tageszeit/Wochentag).
+3. **Zielgröße:** Das Modell lernt den **nächsten** 10-Minuten-Preis (ein Schritt).
+4. **Training:** Ein Regressionsmodell lernt „Fenster + Zeit-Features → nächster Preis“. Für die Prognose der nächsten 24 h wird es **144-mal nacheinander** aufgerufen (autoregressiv: jede Prognose wird ins Fenster geschoben, nächster Schritt vorhergesagt).
+5. **Speicherung:** Ein Modell pro Kombination **Station + Kraftstoff** unter `stations/<station_id>/<fuel_type>/`.
+
+### Welches ML-Modell wird verwendet und warum?
+
+Es kommt **Gradient Boosting** (scikit-learn: `GradientBoostingRegressor`) zum Einsatz.
+
+- **Vorteile:** Funktioniert gut mit tabellarischen Features (Lags, Rollings, Tageszeit), braucht keine riesigen Datenmengen (passend für z. B. 2 Wochen), keine Skalierung nötig, robust gegen Ausreißer, schnell trainierbar und vorhersagbar, kein GPU nötig, einfach deploybar (joblib).
+- **Warum kein LSTM/Transformer?** Würden mehr Daten und Aufwand erfordern; bei 2 Wochen und 10-Min-Auflösung bringt Boosting oft mehr.
+- **Warum kein Prophet?** Eher für starke Saisonalität auf Tages-/Wochenebene; hier geht es um kurzen Horizont (24 h) und 10-Min-Detail.
+- **Warum keine lineare Regression / ARIMA?** Würden die nichtlinearen Muster (Tagesgang, Schocks) schlechter abbilden – die Vorhersage wirkt dann „zu linear“.
+
+Kurz: Gradient Boosting ist ein guter Kompromiss aus Genauigkeit, Stabilität und Einfachheit bei begrenzten Daten.
+
+### Ab wie vielen Datenpunkten wird ein Kraftstoff trainiert?
+
+- **Rohdaten (Influx-Zeilen):** Es wird nur trainiert, wenn **mindestens 344 Punkte** vorhanden sind (`LOOKBACK_PERIODS_10MIN + 200` = 144 + 200).
+- **Nach der Feature-Erstellung:** Zusätzlich müssen **mindestens 20 Trainings-Samples** entstehen (sonst wird die Station/Sprit-Kombination übersprungen).
+
+Für stabiles Training mit 2 Wochen im 10-Min-Takt (ca. 2000+ Punkte) bist du damit deutlich über dem Minimum.
+
+---
+
 ## Kurzreferenz: Wichtige Befehle
 
 | Aktion | Befehl |
