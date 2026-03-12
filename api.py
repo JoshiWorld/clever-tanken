@@ -156,6 +156,7 @@ def api_prediction(
             station_id=station_id,
             fuel_type=fuel_type,
             num_steps=num_steps,
+            last_ts=last_ts,
         )
         for i, price in enumerate(preds):
             t = last_ts + timedelta(minutes=(i + 1) * PREDICTION_INTERVAL_MINUTES)

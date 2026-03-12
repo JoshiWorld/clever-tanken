@@ -23,7 +23,7 @@ except ImportError:
     pass
 import argparse
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 import numpy as np
@@ -312,6 +312,13 @@ def build_features(
             if len(window) >= 24:
                 row["recent_max_24"] = window.tail(24).max()
                 row["recent_min_24"] = window.tail(24).min()
+            ts = series.index[i]
+            hour = getattr(ts, "hour", 0)
+            dow = getattr(ts, "dayofweek", 0)
+            row["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+            row["hour_cos"] = np.cos(2 * np.pi * hour / 24)
+            row["dow_sin"] = np.sin(2 * np.pi * dow / 7)
+            row["dow_cos"] = np.cos(2 * np.pi * dow / 7)
             target = series.iloc[i]
             X_list.append(row)
             y_list.append(target)
@@ -353,14 +360,16 @@ def train_model(
     test_size: float = 0.2,
     random_state: int = 42,
 ) -> tuple[GradientBoostingRegressor, dict]:
-    """Trainiert GradientBoostingRegressor und gibt Modell + Metriken zurück."""
+    """Trainiert GradientBoostingRegressor für präzise 10-Min-Vorhersage (nächste 24 h)."""
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state, shuffle=False
     )
     model = GradientBoostingRegressor(
-        n_estimators=100,
-        max_depth=5,
-        learning_rate=0.1,
+        n_estimators=200,
+        max_depth=6,
+        learning_rate=0.08,
+        min_samples_leaf=8,
+        subsample=0.85,
         random_state=random_state,
     )
     model.fit(X_train, y_train)
@@ -409,6 +418,7 @@ def save_artifact(
     if lookback_periods is not None:
         meta["lookback_periods"] = lookback_periods
         meta["horizon_periods"] = horizon_periods or 1
+        meta["interval_minutes"] = PREDICT_INTERVAL_MINUTES
     if lookback_hours is not None:
         meta["lookback_hours"] = lookback_hours
         meta["horizon_hours"] = horizon_hours or 24
@@ -567,8 +577,12 @@ def main():
     )
 
 
-def _build_feature_row(window: np.ndarray, feature_names: list[str]) -> pd.DataFrame:
-    """Baut eine Zeile Features aus einem Fenster (für Vorhersage)."""
+def _build_feature_row(
+    window: np.ndarray,
+    feature_names: list[str],
+    step_ts: datetime | pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """Baut eine Zeile Features aus einem Fenster (für Vorhersage). step_ts = Zeitpunkt des vorherzusagenden Schritts (für hour_sin/cos, dow_sin/cos)."""
     row = {}
     for name in feature_names:
         if name.startswith("lag_"):
@@ -597,6 +611,17 @@ def _build_feature_row(window: np.ndarray, feature_names: list[str]) -> pd.DataF
             row[name] = np.max(window[-24:])
         elif name == "recent_min_24" and len(window) >= 24:
             row[name] = np.min(window[-24:])
+    if step_ts is not None:
+        hour = getattr(step_ts, "hour", 0)
+        dow = getattr(step_ts, "dayofweek", 0)
+        if "hour_sin" in feature_names:
+            row["hour_sin"] = float(np.sin(2 * np.pi * hour / 24))
+        if "hour_cos" in feature_names:
+            row["hour_cos"] = float(np.cos(2 * np.pi * hour / 24))
+        if "dow_sin" in feature_names:
+            row["dow_sin"] = float(np.sin(2 * np.pi * dow / 7))
+        if "dow_cos" in feature_names:
+            row["dow_cos"] = float(np.cos(2 * np.pi * dow / 7))
     for name in feature_names:
         if name not in row:
             row[name] = 0.0
@@ -649,6 +674,7 @@ def predict_next_144_steps(
     station_id: int | str,
     fuel_type: str,
     num_steps: int = 144,
+    last_ts: datetime | pd.Timestamp | None = None,
 ) -> list[float]:
     """
     Erzeugt die Vorhersagelinie für die nächsten 24 h im 10-Minuten-Takt (144 Punkte).
@@ -656,10 +682,8 @@ def predict_next_144_steps(
     Das Modell sagt pro Aufruf nur den *nächsten* 10-Min-Preis vorher. Hier wird es
     144× nacheinander aufgerufen: Fenster (letzte 24 h) → Prediction → Fenster um
     einen Schritt weiterschieben (ältester raus, Prediction rein) → wieder Prediction.
-    So entstehen 144 verschiedene Preise für t+10min, t+20min, … t+24h = die Linie.
-
-    Das Modell muss im 10min-Modus trainiert sein (lookback_periods=144).
-    history_prices = letzte 24 h in 10-min-Auflösung (mind. 144 Punkte).
+    last_ts = Zeitstempel des letzten Punkts in history_prices; für jeden Schritt wird
+    step_ts = last_ts + (k+1)*10min gesetzt (für Tageszeit-/Wochentag-Features).
     """
     base_dir = station_model_dir(station_id, fuel_type)
     model_path = base_dir / "tankpreis_model.joblib"
@@ -682,10 +706,16 @@ def predict_next_144_steps(
         raise ValueError(
             f"Mindestens {lookback} Preispunkte (24 h in 10-min) nötig, erhalten: {len(prices)}"
         )
+    if last_ts is not None and hasattr(last_ts, "tzinfo") and last_ts.tzinfo is None:
+        last_ts = last_ts.replace(tzinfo=timezone.utc)
+    if last_ts is None:
+        last_ts = datetime.now(timezone.utc)
+    interval_min = meta.get("interval_minutes", PREDICT_INTERVAL_MINUTES)
     window = list(prices[-lookback:])
     predictions = []
-    for _ in range(num_steps):
-        X = _build_feature_row(np.array(window), feature_names)
+    for k in range(num_steps):
+        step_ts = last_ts + timedelta(minutes=(k + 1) * interval_min)
+        X = _build_feature_row(np.array(window), feature_names, step_ts=step_ts)
         pred = float(model.predict(X)[0])
         predictions.append(pred)
         window = window[1:] + [pred]
