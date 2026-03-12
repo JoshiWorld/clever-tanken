@@ -347,21 +347,30 @@
       localStorage.setItem(THEME_KEY, theme);
       applyThemeToChart();
     }
+    function getChartThemeColors() {
+      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      return {
+        text: isLight ? '#374151' : '#a8b2c1',
+        grid: isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.06)',
+        tooltipBg: isLight ? 'rgba(255,255,255,0.97)' : 'rgba(24,28,36,0.96)',
+        tooltipBorder: isLight ? 'rgba(0,0,0,0.1)' : '#2a3142',
+        tooltipTitle: isLight ? '#111827' : '#f0f2f5',
+        tooltipBody: isLight ? '#4b5563' : '#e2e6eb',
+      };
+    }
     function applyThemeToChart() {
       if (!chart) return;
-      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
-      const grid = isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.06)';
-      const text = isLight ? '#4b5563' : '#a8b2c1';
-      const tooltipBg = isLight ? 'rgba(255,255,255,0.97)' : 'rgba(24,28,36,0.96)';
-      const tooltipBorder = isLight ? 'rgba(0,0,0,0.1)' : '#2a3142';
-      chart.options.scales.x.grid.color = grid;
-      chart.options.scales.x.ticks.color = text;
-      chart.options.scales.y.grid.color = grid;
-      chart.options.scales.y.ticks.color = text;
-      chart.options.scales.y.title.color = text;
-      chart.options.plugins.legend.labels.color = text;
-      chart.options.plugins.tooltip.backgroundColor = tooltipBg;
-      chart.options.plugins.tooltip.borderColor = tooltipBorder;
+      const c = getChartThemeColors();
+      chart.options.scales.x.grid.color = c.grid;
+      chart.options.scales.x.ticks.color = c.text;
+      chart.options.scales.y.grid.color = c.grid;
+      chart.options.scales.y.ticks.color = c.text;
+      chart.options.scales.y.title.color = c.text;
+      chart.options.plugins.legend.labels.color = c.text;
+      chart.options.plugins.tooltip.backgroundColor = c.tooltipBg;
+      chart.options.plugins.tooltip.borderColor = c.tooltipBorder;
+      chart.options.plugins.tooltip.titleColor = c.tooltipTitle;
+      chart.options.plugins.tooltip.bodyColor = c.tooltipBody;
       chart.update('none');
     }
 
@@ -490,6 +499,7 @@
         }
 
         if (!chart) {
+          const theme = getChartThemeColors();
           chart = new Chart(document.getElementById('chart'), {
             type: 'line',
             data: {
@@ -508,31 +518,43 @@
                 x: {
                   type: 'time',
                   time: { unit: 'hour', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'dd.MM.' } },
-                  grid: { color: 'rgba(255,255,255,0.06)' },
-                  ticks: { color: '#a8b2c1', font: { size: 11 } },
+                  grid: { color: theme.grid },
+                  ticks: {
+                    color: theme.text,
+                    font: { size: 11 },
+                    callback: function(value) {
+                      const d = new Date(value);
+                      return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                    },
+                  },
                 },
                 y: {
                   beginAtZero: false,
-                  title: { display: true, text: 'Preis (€/l)', color: '#a8b2c1', font: { size: 12 } },
-                  grid: { color: 'rgba(255,255,255,0.06)' },
-                  ticks: { color: '#a8b2c1', font: { size: 11 }, callback: function(v) { return v.toFixed(2) + ' €'; } },
+                  title: { display: true, text: 'Preis (€/l)', color: theme.text, font: { size: 12 } },
+                  grid: { color: theme.grid },
+                  ticks: { color: theme.text, font: { size: 11 }, callback: function(v) { return v.toFixed(2) + ' €'; } },
                 },
               },
               plugins: {
                 legend: {
                   position: 'top',
                   align: 'end',
-                  labels: { color: '#a8b2c1', font: { size: 12 }, usePointStyle: true, padding: 16 },
+                  labels: { color: theme.text, font: { size: 12 }, usePointStyle: true, padding: 16 },
                 },
                 tooltip: {
-                  backgroundColor: 'rgba(24, 28, 36, 0.96)',
-                  titleColor: '#f0f2f5',
-                  bodyColor: '#e2e6eb',
-                  borderColor: '#2a3142',
+                  backgroundColor: theme.tooltipBg,
+                  titleColor: theme.tooltipTitle,
+                  bodyColor: theme.tooltipBody,
+                  borderColor: theme.tooltipBorder,
                   borderWidth: 1,
                   padding: 12,
                   displayColors: true,
                   callbacks: {
+                    title: function(items) {
+                      if (!items.length) return '';
+                      const d = new Date(items[0].parsed.x);
+                      return d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' Uhr';
+                    },
                     label: function(context) {
                       const v = context.parsed.y;
                       return context.dataset.label + ': ' + (typeof v === 'number' ? v.toFixed(2) : v) + ' €';
