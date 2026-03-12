@@ -60,11 +60,64 @@ INFLUX_FUEL_TYPE_COL = os.getenv("INFLUX_FUEL_TYPE_COL", "fuel_type")  # z. B. "
 STATIONS_BASE_DIR = Path(os.getenv("STATIONS_BASE_DIR", "stations"))
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "168"))  # 7 Tage
 PREDICT_HORIZON_HOURS = int(os.getenv("PREDICT_HORIZON_HOURS", "24"))
-# 10-Minuten-Vorhersage: Lookback 24 h in 10-min-Schritten = 144 Perioden, Horizont 1 (nächster 10-min-Preis)
+# InfluxDB 3 Core: Limit an Parquet-Files pro Query. 0/leer = nicht setzen.
+INFLUX_QUERY_FILE_LIMIT = int(os.getenv("INFLUX_QUERY_FILE_LIMIT", "0") or "0")
+# 10-Minuten-Vorhersage: Lookback = letzte 24 h als Eingabe (144 × 10 min). Das Modell lernt
+# pro Schritt nur den *nächsten* 10-min-Preis; predict_next_144_steps ruft das 144× auf
+# und ergibt so 144 verschiedene Preise = Vorhersagelinie für die nächsten 24 h.
 PREDICT_INTERVAL_MINUTES = int(os.getenv("PREDICT_INTERVAL_MINUTES", "10"))
-LOOKBACK_PERIODS_10MIN = 24 * 60 // PREDICT_INTERVAL_MINUTES  # 144
+LOOKBACK_PERIODS_10MIN = 24 * 60 // PREDICT_INTERVAL_MINUTES  # 144 = Anzahl 10-min-Slots in 24 h (Eingabefenster)
 # Standard-Historie für Training (Stunden). None = so viel wie nötig; 2 Jahre = 17520
 DEFAULT_TRAINING_HOURS = int(os.getenv("DEFAULT_TRAINING_HOURS", "17520"))
+
+_WARNED_QUERY_FILE_LIMIT_UNSUPPORTED = False
+
+
+def _query_dataframe_safe(client, sql: str, *, query_file_limit: int | None = None) -> pd.DataFrame:
+    """
+    Führt eine SQL-Query aus und liefert ein DataFrame.
+
+    InfluxDB 3 Core hat serverseitig ein `query-file-limit` (Parquet-File Scan Limit).
+    Viele Setups zeigen an, man solle das Limit mit `--query-file-limit` erhöhen – das ist
+    primär ein *Server* (serve) Flag.
+
+    Manche Client-Versionen unterstützen das Weiterreichen entsprechender Optionen nicht
+    (PyArrow `FlightCallOptions` akzeptiert dann kein `query_file_limit`). Deshalb:
+    - wir versuchen es (falls gesetzt)
+    - bei TypeError fallen wir zurück und warnen einmalig mit Hinweis auf Server-Config.
+    """
+    global _WARNED_QUERY_FILE_LIMIT_UNSUPPORTED
+    if query_file_limit:
+        try:
+            return client.query_dataframe(sql, language="sql", query_file_limit=query_file_limit)
+        except TypeError:
+            if not _WARNED_QUERY_FILE_LIMIT_UNSUPPORTED:
+                _WARNED_QUERY_FILE_LIMIT_UNSUPPORTED = True
+                print(
+                    "Hinweis: Dein influxdb3-python/PyArrow unterstützt das Weiterreichen von "
+                    "`query_file_limit` nicht (TypeError in FlightCallOptions). "
+                    "Bitte setze das Limit serverseitig beim Start von InfluxDB 3 Core, z. B.: "
+                    "`influxdb3 serve --query-file-limit 2000` (oder ENV `INFLUXDB3_QUERY_FILE_LIMIT`)."
+                )
+    return client.query_dataframe(sql, language="sql")
+
+
+def _query_table_safe(client, sql: str, *, query_file_limit: int | None = None):
+    """Wie `_query_dataframe_safe`, aber nutzt `client.query()` (Arrow Table)."""
+    global _WARNED_QUERY_FILE_LIMIT_UNSUPPORTED
+    if query_file_limit:
+        try:
+            return client.query(query=sql, language="sql", query_file_limit=query_file_limit)
+        except TypeError:
+            if not _WARNED_QUERY_FILE_LIMIT_UNSUPPORTED:
+                _WARNED_QUERY_FILE_LIMIT_UNSUPPORTED = True
+                print(
+                    "Hinweis: Dein influxdb3-python/PyArrow unterstützt das Weiterreichen von "
+                    "`query_file_limit` nicht (TypeError in FlightCallOptions). "
+                    "Bitte setze das Limit serverseitig beim Start von InfluxDB 3 Core, z. B.: "
+                    "`influxdb3 serve --query-file-limit 2000` (oder ENV `INFLUXDB3_QUERY_FILE_LIMIT`)."
+                )
+    return client.query(query=sql, language="sql")
 
 
 def _parse_influx_host():
@@ -109,7 +162,10 @@ def get_influx_client():
     return InfluxDBClient3(**kwargs)
 
 
-def get_station_fuel_combinations(hours: int | None = None) -> list[tuple[int | str, str]]:
+def get_station_fuel_combinations(
+    hours: int | None = None,
+    query_file_limit: int | None = None,
+) -> list[tuple[int | str, str]]:
     """
     Ermittelt alle (station_id, fuel_type)-Kombinationen aus InfluxDB 3.
 
@@ -117,6 +173,8 @@ def get_station_fuel_combinations(hours: int | None = None) -> list[tuple[int | 
         Liste von (station_id, fuel_type), z. B. [(993, "ARAL Ultimate 102"), ...].
     """
     hours = hours if hours is not None else DEFAULT_TRAINING_HOURS
+    if query_file_limit is None and INFLUX_QUERY_FILE_LIMIT > 0:
+        query_file_limit = INFLUX_QUERY_FILE_LIMIT
     sql = f"""
     SELECT DISTINCT "{INFLUX_STATION_ID_COL}", "{INFLUX_FUEL_TYPE_COL}"
     FROM "{INFLUX_TABLE}"
@@ -126,9 +184,9 @@ def get_station_fuel_combinations(hours: int | None = None) -> list[tuple[int | 
     client = get_influx_client()
     try:
         try:
-            df = client.query_dataframe(sql, language="sql")
+            df = _query_dataframe_safe(client, sql, query_file_limit=query_file_limit)
         except AttributeError:
-            table = client.query(query=sql, language="sql")
+            table = _query_table_safe(client, sql, query_file_limit=query_file_limit)
             if hasattr(table, "read_all"):
                 table = table.read_all()
             df = table.to_pandas()
@@ -148,6 +206,7 @@ def load_tankpreise_from_influx(
     station_id: int | str | None = None,
     fuel_type: str | None = None,
     hours: int | None = None,
+    query_file_limit: int | None = None,
     extra_columns: list[str] | None = None,
 ) -> pd.DataFrame:
     """
@@ -156,6 +215,8 @@ def load_tankpreise_from_influx(
     Erwartetes Schema: time, price, station_id, fuel_type (Sprit, z. B. "ARAL Ultimate 102").
     """
     hours = hours if hours is not None else DEFAULT_TRAINING_HOURS
+    if query_file_limit is None and INFLUX_QUERY_FILE_LIMIT > 0:
+        query_file_limit = INFLUX_QUERY_FILE_LIMIT
     cols = [INFLUX_TIME_COL, INFLUX_PRICE_COL, INFLUX_STATION_ID_COL, INFLUX_FUEL_TYPE_COL]
     if extra_columns:
         cols.extend(extra_columns)
@@ -181,9 +242,9 @@ def load_tankpreise_from_influx(
     client = get_influx_client()
     try:
         try:
-            df = client.query_dataframe(sql, language="sql")
+            df = _query_dataframe_safe(client, sql, query_file_limit=query_file_limit)
         except AttributeError:
-            table = client.query(query=sql, language="sql")
+            table = _query_table_safe(client, sql, query_file_limit=query_file_limit)
             if hasattr(table, "read_all"):
                 table = table.read_all()
             df = table.to_pandas()
@@ -207,8 +268,9 @@ def build_features(
     """
     Erstellt Lag- und Rollings-Features aus der Preis-Zeitreihe.
 
-    - Bei resample_rule="10min" und lookback_periods/horizon_periods: Vorhersage des
-      nächsten 10-Min-Preises (ein Schritt), Lookback 144 Perioden (24 h).
+    - Bei resample_rule="10min": Vorhersage des *nächsten* 10-Min-Preises (1 Schritt).
+      Lookback = 144 Perioden = letzte 24 h als Eingabe. Die spätere 24-h-Linie entsteht,
+      indem predict_next_144_steps das Modell 144× iterativ aufruft (jeweils nächste 10 min).
       Zusätzliche Features für plötzliche Niveauänderungen (z. B. Krisen): recent_mean_6,
       level_shift_6_24, level_shift_24_72, recent_max_24, recent_min_24 – damit die KI
       bei stark gestiegenen Preisen der letzten 24 h das neue Niveau vorhersagt.
@@ -361,6 +423,7 @@ def run_training(
     resample_rule: str = "10min",
     station_id: int | str | None = None,
     fuel_type: str | None = None,
+    query_file_limit: int | None = None,
 ) -> None:
     """
     Trainiert pro Tankstelle und Sprit ein Modell und speichert unter stations/<id>/<Sprit>/.
@@ -378,7 +441,7 @@ def run_training(
         combinations = [(station_id, fuel_type)]
     else:
         print("Ermittle Tankstellen und Kraftstoffsorten aus InfluxDB 3 …")
-        combinations = get_station_fuel_combinations(hours=hours)
+        combinations = get_station_fuel_combinations(hours=hours, query_file_limit=query_file_limit)
         if not combinations:
             raise ValueError(
                 "Keine (station_id, fuel_type)-Kombinationen in InfluxDB gefunden. "
@@ -391,7 +454,12 @@ def run_training(
         out_dir = station_model_dir(sid, ftype)
         if (out_dir / "tankpreis_model.joblib").exists():
             print("  Bestehendes Modell gefunden → wird mit allen Daten aus Influx neu trainiert (inkl. neuer Punkte).")
-        df = load_tankpreise_from_influx(station_id=sid, fuel_type=ftype, hours=hours)
+        df = load_tankpreise_from_influx(
+            station_id=sid,
+            fuel_type=ftype,
+            hours=hours,
+            query_file_limit=query_file_limit,
+        )
         use_10min = resample_rule.strip().lower() == "10min"
         min_points = (LOOKBACK_PERIODS_10MIN + 200) if use_10min else (LOOKBACK_HOURS + PREDICT_HORIZON_HOURS)
         if df.empty or len(df) < min_points:
@@ -480,6 +548,12 @@ def main():
         default=None,
         help="Nur diesen Kraftstoff trainieren (z. B. 'ARAL Ultimate 102')",
     )
+    parser.add_argument(
+        "--query-file-limit",
+        type=int,
+        default=None,
+        help="InfluxDB 3 Core: erlaubt Query-Planung über mehr Parquet-Files (z. B. 1000). Alternativ ENV INFLUX_QUERY_FILE_LIMIT.",
+    )
     args = parser.parse_args()
 
     sid: int | str | None = int(args.station_id) if args.station_id and args.station_id.isdigit() else args.station_id
@@ -489,6 +563,7 @@ def main():
         resample_rule=args.resample,
         station_id=sid,
         fuel_type=args.fuel_type,
+        query_file_limit=args.query_file_limit,
     )
 
 
@@ -576,7 +651,12 @@ def predict_next_144_steps(
     num_steps: int = 144,
 ) -> list[float]:
     """
-    Nächste 144 Preise im 10-Minuten-Takt (24 h) durch iteratives Vorhersagen.
+    Erzeugt die Vorhersagelinie für die nächsten 24 h im 10-Minuten-Takt (144 Punkte).
+
+    Das Modell sagt pro Aufruf nur den *nächsten* 10-Min-Preis vorher. Hier wird es
+    144× nacheinander aufgerufen: Fenster (letzte 24 h) → Prediction → Fenster um
+    einen Schritt weiterschieben (ältester raus, Prediction rein) → wieder Prediction.
+    So entstehen 144 verschiedene Preise für t+10min, t+20min, … t+24h = die Linie.
 
     Das Modell muss im 10min-Modus trainiert sein (lookback_periods=144).
     history_prices = letzte 24 h in 10-min-Auflösung (mind. 144 Punkte).
