@@ -2,10 +2,11 @@
 API und Frontend für Tankpreise & Vorhersage.
 
 Endpoints:
-  GET /api/stations     – verfügbare Stationen + Kraftstoffsorten (mit trainiertem Modell)
-  GET /api/prices       – letzte N Stunden Preise (InfluxDB)
-  GET /api/prediction   – Vorhersage für nächsten Horizont
-  GET /api/best-time    – historisch günstigste Uhrzeit + Prognose
+  GET /api/stations       – verfügbare Stationen + Kraftstoffsorten (mit trainiertem Modell)
+  GET /api/prices         – letzte N Stunden Preise (InfluxDB)
+  GET /api/prediction     – Vorhersage (hours=24|72|168: nächste 24h, 3 oder 7 Tage)
+  GET /api/best-time      – historisch günstigste Uhrzeit (7 Tage) + Prognose
+  best_time_past ist in der Antwort von GET /api/best-time enthalten (günstigster Wochentag+Uhrzeit, letzte 2 Wochen)
 """
 
 from __future__ import annotations
@@ -69,6 +70,10 @@ def api_stations():
     return {"stations": get_available_stations()}
 
 
+WEEKDAY_DE = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+PAST_DAYS_HOURS = 14 * 24  # 2 Wochen
+
+
 @app.get("/api/prices")
 def api_prices(
     station_id: int = Query(..., description="Tankstellen-ID"),
@@ -96,21 +101,34 @@ def api_prices(
     return {"data": data}
 
 
-# Vorhersage im 10-Minuten-Takt: 24 h = 144 Punkte
+# Vorhersage im 10-Minuten-Takt: 24 h = 144 Punkte, 72 h = 432, 168 h = 1008
 PREDICTION_INTERVAL_MINUTES = 10
-PREDICTION_POINTS_24H = 24 * 60 // PREDICTION_INTERVAL_MINUTES  # 144
+ALLOWED_HORIZON_HOURS = (24, 72, 168)  # 24 h, 3 Tage, 7 Tage
+
+
+def _prediction_num_steps(hours: int) -> int:
+    """Anzahl 10-Minuten-Schritte für gegebene Stunden."""
+    return hours * 60 // PREDICTION_INTERVAL_MINUTES
 
 
 @app.get("/api/prediction")
 def api_prediction(
     station_id: int = Query(..., description="Tankstellen-ID"),
     fuel_type: str = Query(..., description="Kraftstoffsorte"),
+    horizon: int = Query(24, description="Vorhersage in Stunden: 24, 72 oder 168"),
 ):
     """
-    Vorhersage für die nächsten 24 Stunden im 10-Minuten-Takt (144 Punkte).
-    Nutzt das 10min-Modell (train.py --resample 10min) für echte 144 Werte;
-    sonst Fallback: ein 24h-Durchschnitt 144× wiederholt.
+    Vorhersage für die nächsten N Stunden im 10-Minuten-Takt.
+    horizon: 24 (24h), 72 (3 Tage) oder 168 (7 Tage). Query-Parameter: horizon=72
     """
+    try:
+        h = int(horizon)
+    except (TypeError, ValueError):
+        h = 24
+    if h not in ALLOWED_HORIZON_HOURS:
+        h = 24
+    hours = h
+    num_steps = _prediction_num_steps(hours)
     try:
         df = load_tankpreise_from_influx(
             station_id=station_id,
@@ -123,7 +141,6 @@ def api_prediction(
         raise HTTPException(status_code=404, detail="Keine Preisdaten für diese Kombination.")
     df = df.sort_values("time")
     df = df.set_index("time")
-    # Auf 10-Minuten resamplen, damit wir 144 Punkte für das 10min-Modell haben
     series_10min = df["price"].resample("10min").mean().ffill().bfill()
     history_10min = series_10min.tail(LOOKBACK_PERIODS_10MIN + 10).tolist()
     last_ts = series_10min.index[-1]
@@ -138,7 +155,7 @@ def api_prediction(
             history_10min,
             station_id=station_id,
             fuel_type=fuel_type,
-            num_steps=PREDICTION_POINTS_24H,
+            num_steps=num_steps,
         )
         for i, price in enumerate(preds):
             t = last_ts + timedelta(minutes=(i + 1) * PREDICTION_INTERVAL_MINUTES)
@@ -161,13 +178,13 @@ def api_prediction(
         except (FileNotFoundError, ValueError) as e:
             raise HTTPException(status_code=404, detail=str(e))
         predicted = round(predicted, 3)
-        for i in range(PREDICTION_POINTS_24H):
+        for i in range(num_steps):
             t = last_ts + timedelta(minutes=(i + 1) * PREDICTION_INTERVAL_MINUTES)
             points.append({"time": t.isoformat(), "price": predicted})
 
     return {
         "predicted_price": predicted,
-        "horizon_hours": 24,
+        "horizon_hours": hours,
         "interval_minutes": PREDICTION_INTERVAL_MINUTES,
         "points": points,
     }
@@ -180,7 +197,7 @@ def api_best_time(
 ):
     """
     Historisch günstigste Uhrzeit (letzte 7 Tage, nach Stunde gruppiert)
-    plus Vorhersage für die nächsten 24h.
+    plus Vorhersage für die nächsten 24h. Enthält außerdem best_time_past (günstigster Wochentag+Uhrzeit der letzten 2 Wochen).
     """
     try:
         df = load_tankpreise_from_influx(
@@ -209,6 +226,35 @@ def api_best_time(
         predicted = predict_from_current_prices(prices, station_id=station_id, fuel_type=fuel_type)
     except (FileNotFoundError, ValueError):
         pass
+
+    best_time_past = {"weekday": None, "hour": None, "avg_price": None, "message": None}
+    try:
+        df_14 = load_tankpreise_from_influx(
+            station_id=station_id,
+            fuel_type=fuel_type,
+            hours=PAST_DAYS_HOURS,
+        )
+        if not df_14.empty and "time" in df_14.columns and "price" in df_14.columns:
+            df_14 = df_14.sort_values("time")
+            df_14["weekday"] = df_14["time"].dt.weekday
+            df_14["hour"] = df_14["time"].dt.hour
+            agg = df_14.groupby(["weekday", "hour"])["price"].agg(["mean", "count"]).reset_index()
+            agg = agg[agg["count"] >= 2]
+            if not agg.empty:
+                best = agg.loc[agg["mean"].idxmin()]
+                wd = int(best["weekday"])
+                hr = int(best["hour"])
+                avg = round(float(best["mean"]), 3)
+                best_time_past = {
+                    "weekday": WEEKDAY_DE[wd],
+                    "weekday_num": wd,
+                    "hour": hr,
+                    "avg_price": avg,
+                    "message": f"In den letzten 2 Wochen war {WEEKDAY_DE[wd]} {hr}:00–{hr + 1}:00 Uhr im Schnitt am günstigsten (Ø {avg:.2f} €/l).",
+                }
+    except Exception:
+        pass
+
     return {
         "best_hour": best_hour,
         "message": best_message,
@@ -217,6 +263,7 @@ def api_best_time(
             {"hour": int(r["hour"]), "avg_price": round(float(r["mean"]), 3)}
             for _, r in by_hour.iterrows()
         ] if not by_hour.empty else [],
+        "best_time_past": best_time_past,
     }
 
 

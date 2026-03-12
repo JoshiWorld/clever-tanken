@@ -114,47 +114,120 @@
       font-weight: 400;
       letter-spacing: 0.01em;
     }
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1.25rem;
-      align-items: flex-end;
+    .station-picker {
       margin-bottom: 2rem;
       animation: fadeInUp 0.6s var(--ease-out) 0.08s both;
     }
-    .field {
-      display: flex;
-      flex-direction: column;
-      gap: 0.4rem;
+    .station-search-wrap {
+      position: relative;
+      margin-bottom: 1rem;
     }
-    .field label {
+    .station-search-wrap input {
+      width: 100%;
+      max-width: 420px;
+      background: var(--surface-solid);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.75rem 1rem 0.75rem 2.75rem;
+      border-radius: var(--radius-sm);
+      font-size: 0.95rem;
+      font-family: inherit;
+      transition: border-color 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+    }
+    .station-search-wrap input::placeholder { color: var(--muted); }
+    .station-search-wrap input:hover { border-color: var(--border-hover); }
+    .station-search-wrap input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .station-search-wrap .search-icon {
+      position: absolute;
+      left: 1rem;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 18px;
+      height: 18px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .station-list {
+      max-height: 280px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-solid);
+      margin-bottom: 1.25rem;
+    }
+    .station-item {
+      display: block;
+      width: 100%;
+      padding: 0.85rem 1rem;
+      text-align: left;
+      background: none;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.2s var(--ease-out), border-color 0.2s var(--ease-out);
+    }
+    .station-item:last-child { border-bottom: none; }
+    .station-item:hover { background: var(--surface); }
+    .station-item.selected {
+      background: rgba(99, 102, 241, 0.12);
+      border-left: 3px solid var(--accent);
+      padding-left: calc(1rem - 3px);
+    }
+    .station-item .station-item-name { font-weight: 600; color: var(--text); margin-bottom: 0.5rem; display: block; }
+    .station-item .station-item-addr { font-size: 0.8rem; color: var(--text-soft); display: block; }
+    .fuel-picker {
+      display: none;
+      margin-top: 1rem;
+    }
+    .fuel-picker.visible { display: block; animation: fadeInUp 0.35s var(--ease-out); }
+    .fuel-picker .fuel-picker-label,
+    .fuel-picker label {
+      display: block;
       font-size: 0.75rem;
       font-weight: 500;
       color: var(--text-soft);
       text-transform: uppercase;
       letter-spacing: 0.08em;
+      margin-bottom: 0.5rem;
     }
-    .field select {
+    .fuel-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .fuel-option {
+      padding: 0.5rem 1rem;
       background: var(--surface-solid);
       border: 1px solid var(--border);
-      color: var(--text);
-      padding: 0.6rem 1rem;
       border-radius: var(--radius-sm);
-      min-width: 200px;
-      font-size: 0.9rem;
+      color: var(--text);
+      font-size: 0.875rem;
       font-family: inherit;
       cursor: pointer;
-      transition: border-color 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out), transform 0.25s var(--ease-out);
+      transition: border-color 0.2s var(--ease-out), background 0.2s var(--ease-out), color 0.2s var(--ease-out);
     }
-    .field select:hover {
-      border-color: var(--border-hover);
-      transform: translateY(-1px);
-    }
-    .field select:focus {
-      outline: none;
+    .fuel-option:hover { border-color: var(--border-hover); }
+    .fuel-option.selected {
+      background: var(--accent);
       border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-glow);
-      transform: translateY(-1px);
+      color: #fff;
+    }
+    .main-content {
+      display: none;
+      opacity: 0;
+      transition: opacity 0.4s var(--ease-out);
+    }
+    .main-content.visible {
+      display: block;
+      opacity: 1;
+      animation: fadeIn 0.4s var(--ease-out);
     }
     .cards {
       display: grid;
@@ -175,6 +248,7 @@
     }
     .card:nth-child(1) { animation-delay: 0.14s; }
     .card:nth-child(2) { animation-delay: 0.2s; }
+    .card:nth-child(3) { animation-delay: 0.26s; }
     .card::after {
       content: '';
       position: absolute;
@@ -302,18 +376,21 @@
     </button>
   </header>
 
-  <div class="controls">
-    <div class="field">
-      <label for="station">Station</label>
-      <select id="station"></select>
+  <div class="station-picker">
+    <div class="station-search-wrap">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" id="station-search" placeholder="Adresse, Ort oder PLZ durchsuchen" autocomplete="off" aria-label="Stationen durchsuchen">
     </div>
-    <div class="field">
-      <label for="fuel">Kraftstoffsorte</label>
-      <select id="fuel"></select>
+    <div class="station-list" id="station-list" role="listbox" aria-label="Stationen"></div>
+    <div class="fuel-picker" id="fuel-picker">
+      <span class="fuel-picker-label" aria-hidden="true">Kraftstoffsorte</span>
+      <div class="fuel-list" id="fuel-list" role="listbox" aria-label="Kraftstoffsorte wählen"></div>
     </div>
   </div>
-  <div class="station-details" id="station-details" aria-live="polite"></div>
+  <input type="hidden" id="station" value="">
+  <input type="hidden" id="fuel" value="">
 
+  <div class="main-content" id="main-content">
   <div class="cards">
     <div class="card">
       <h3>Beste Uhrzeit zum Tanken</h3>
@@ -321,15 +398,21 @@
       <div id="best-time-hint" class="hint"></div>
     </div>
     <div class="card">
-      <h3>Prognose (nächste 24 h)</h3>
-      <div id="prediction-value" class="value">–</div>
-      <div id="prediction-hint" class="hint">Ø erwarteter Preis</div>
+      <h3>Prognose Günstigster Preis</h3>
+      <div id="prediction-min-value" class="value">–</div>
+      <div id="prediction-min-hint" class="hint">Nächste 24 h</div>
+    </div>
+    <div class="card">
+      <h3>Prognose Höchster Preis</h3>
+      <div id="prediction-max-value" class="value">–</div>
+      <div id="prediction-max-hint" class="hint">Nächste 24 h</div>
     </div>
   </div>
 
   <div class="chart-wrap" id="chart-wrap">
     <canvas id="chart"></canvas>
     <div id="chart-error" class="error"></div>
+  </div>
   </div>
 
   <script>
@@ -400,81 +483,125 @@
       return j.stations || [];
     }
 
-    function getStationLabel(sid) {
+    let byStation = {};
+    let allStationIds = [];
+
+    function getStationSearchText(sid) {
       const info = stationsInfoById[String(sid)];
-      if (info && info.name) return info.name + ' (' + sid + ')';
-      return 'Station ' + sid;
+      const parts = [info ? info.name : '', info ? info.adresse : '', info ? info.ort : '', info ? info.plz : '', String(sid)];
+      return parts.filter(Boolean).join(' ').toLowerCase();
     }
 
-    function fillSelects(stations) {
-      const stationSel = document.getElementById('station');
-      const fuelSel = document.getElementById('fuel');
-      const detailsEl = document.getElementById('station-details');
-      stationSel.innerHTML = '<option value="">Station wählen…</option>';
-      fuelSel.innerHTML = '<option value="">Kraftstoffsorte wählen…</option>';
+    function renderStationList(filter) {
+      const listEl = document.getElementById('station-list');
+      const q = (filter || '').trim().toLowerCase();
+      const ids = q ? allStationIds.filter(sid => getStationSearchText(sid).includes(q)) : allStationIds;
+      listEl.innerHTML = '';
+      ids.forEach(sid => {
+        const info = stationsInfoById[String(sid)];
+        const name = info && info.name ? info.name : 'Station ' + sid;
+        const addrParts = [];
+        if (info && info.adresse) addrParts.push(info.adresse);
+        if (info && info.plz) addrParts.push(info.plz);
+        if (info && info.ort) addrParts.push(info.ort);
+        const addr = addrParts.length ? addrParts.join(', ') : '';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'station-item';
+        btn.setAttribute('data-station-id', String(sid));
+        btn.setAttribute('role', 'option');
+        btn.innerHTML = '<span class="station-item-name">' + escapeHtml(name) + '</span>' +
+          (addr ? '<span class="station-item-addr">' + escapeHtml(addr) + '</span>' : '');
+        listEl.appendChild(btn);
+      });
+    }
 
-      const byStation = {};
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function fillStationPicker(stations) {
+      byStation = {};
       stations.forEach(s => {
         if (!byStation[s.station_id]) byStation[s.station_id] = [];
         byStation[s.station_id].push(s.fuel_type);
       });
-      Object.keys(byStation).sort().forEach(sid => {
-        stationSel.appendChild(new Option(getStationLabel(sid), sid));
+      allStationIds = Object.keys(byStation).sort((a, b) => Number(a) - Number(b));
+      renderStationList('');
+
+      const stationSearch = document.getElementById('station-search');
+      const stationList = document.getElementById('station-list');
+      const fuelPicker = document.getElementById('fuel-picker');
+      const fuelList = document.getElementById('fuel-list');
+      const hiddenStation = document.getElementById('station');
+      const hiddenFuel = document.getElementById('fuel');
+      const mainContent = document.getElementById('main-content');
+
+      stationSearch.addEventListener('input', () => renderStationList(stationSearch.value));
+
+      stationList.addEventListener('click', (e) => {
+        const item = e.target.closest('.station-item');
+        if (!item) return;
+        const sid = item.getAttribute('data-station-id');
+        stationList.querySelectorAll('.station-item').forEach(el => el.classList.remove('selected'));
+        item.classList.add('selected');
+        hiddenStation.value = sid;
+        hiddenFuel.value = '';
+        mainContent.classList.remove('visible');
+        fuelList.querySelectorAll('.fuel-option').forEach(el => el.remove());
+        const fuels = byStation[sid] || [];
+        fuels.forEach(ft => {
+          const opt = document.createElement('button');
+          opt.type = 'button';
+          opt.className = 'fuel-option';
+          opt.textContent = ft;
+          opt.setAttribute('data-fuel', ft);
+          opt.setAttribute('role', 'option');
+          fuelList.appendChild(opt);
+        });
+        fuelPicker.classList.add('visible');
+        if (fuels.length === 1) {
+          hiddenFuel.value = fuels[0];
+          fuelList.querySelector('.fuel-option').classList.add('selected');
+          mainContent.classList.add('visible');
+          updateData();
+        }
       });
 
-      function updateStationDetails() {
-        const sid = stationSel.value;
-        detailsEl.innerHTML = '';
-        if (!sid) return;
-        const info = stationsInfoById[String(sid)];
-        if (!info) return;
-        const name = document.createElement('div');
-        name.className = 'station-name';
-        name.textContent = info.name || 'Station ' + sid;
-        detailsEl.appendChild(name);
-        if (info.standort) {
-          const loc = document.createElement('div');
-          loc.textContent = info.standort;
-          detailsEl.appendChild(loc);
-        }
-        const parts = [];
-        if (info.adresse) parts.push(info.adresse);
-        if (info.plz && info.ort) parts.push(info.plz + ' ' + info.ort); else if (info.plz) parts.push(info.plz); else if (info.ort) parts.push(info.ort);
-        if (parts.length) {
-          const addr = document.createElement('div');
-          addr.className = 'station-address';
-          addr.textContent = parts.join(', ');
-          detailsEl.appendChild(addr);
-        }
-      }
-
-      stationSel.addEventListener('change', () => {
-        fuelSel.innerHTML = '<option value="">Kraftstoffsorte wählen…</option>';
-        const fuels = byStation[stationSel.value] || [];
-        fuels.forEach(ft => fuelSel.appendChild(new Option(ft, ft)));
-        if (fuels.length === 1) fuelSel.selectedIndex = 0;
-        updateStationDetails();
+      fuelList.addEventListener('click', (e) => {
+        const opt = e.target.closest('.fuel-option');
+        if (!opt) return;
+        const fuel = opt.getAttribute('data-fuel');
+        fuelList.querySelectorAll('.fuel-option').forEach(el => el.classList.remove('selected'));
+        opt.classList.add('selected');
+        hiddenFuel.value = fuel;
+        mainContent.classList.add('visible');
         updateData();
       });
-      fuelSel.addEventListener('change', updateData);
     }
 
+    function apiParams(sid, fuel, extra) {
+      const p = new URLSearchParams({ station_id: String(sid), fuel_type: String(fuel) });
+      if (extra) Object.keys(extra).forEach(k => p.set(k, String(extra[k])));
+      return p.toString();
+    }
     async function updateData() {
       const sid = document.getElementById('station').value;
       const fuel = document.getElementById('fuel').value;
       if (!sid || !fuel) {
         setBestTime('–', '');
-        setPrediction('–');
+        setPredictionMinMax(null, null);
         if (chart) chart.data.datasets = [{ data: [] }, { data: [] }];
         if (chart) chart.update('none');
         return;
       }
-      const enc = encodeURIComponent;
       try {
         const [pricesRes, predRes, bestRes] = await Promise.all([
-          fetch(API + `/api/prices?station_id=${enc(sid)}&fuel_type=${enc(fuel)}&hours=24`),
-          fetch(API + `/api/prediction?station_id=${enc(sid)}&fuel_type=${enc(fuel)}`),
-          fetch(API + `/api/best-time?station_id=${enc(sid)}&fuel_type=${enc(fuel)}`),
+          fetch(API + '/api/prices?' + apiParams(sid, fuel, { hours: 24 })),
+          fetch(API + '/api/prediction?' + apiParams(sid, fuel, { horizon: 24 }), { cache: 'no-store' }),
+          fetch(API + '/api/best-time?' + apiParams(sid, fuel)),
         ]);
         const pricesJson = await pricesRes.json();
         const predJson = predRes.ok ? await predRes.json() : null;
@@ -492,10 +619,13 @@
         } else {
           setBestTime('–', '');
         }
-        if (predPrice != null) {
-          setPrediction(predPrice.toFixed(2) + ' €', true);
+        if (predPoint.length > 0) {
+          const prices = predPoint.map(d => d.y);
+          const minP = Math.min(...prices);
+          const maxP = Math.max(...prices);
+          setPredictionMinMax(minP, maxP);
         } else {
-          setPrediction('–', false);
+          setPredictionMinMax(null, null);
         }
 
         if (!chart) {
@@ -568,14 +698,14 @@
         } else {
           chart.data.datasets[0].data = data;
           chart.data.datasets[1].data = predPoint;
-          chart.update('active');
+          chart.update('none');
         }
         document.getElementById('chart-wrap').classList.add('canvas-loaded');
         document.getElementById('chart-error').textContent = '';
       } catch (e) {
         document.getElementById('chart-error').textContent = e.message || 'Fehler beim Laden.';
         setBestTime('–', '');
-        setPrediction('–');
+        setPredictionMinMax(null, null);
       }
     }
 
@@ -585,17 +715,30 @@
       el.classList.toggle('success', val !== '–');
       document.getElementById('best-time-hint').textContent = hint;
     }
-    function setPrediction(val, hasValue) {
-      const el = document.getElementById('prediction-value');
-      el.textContent = val;
-      el.classList.toggle('accent', !!hasValue);
+    function setPredictionMinMax(minPrice, maxPrice) {
+      const minEl = document.getElementById('prediction-min-value');
+      const maxEl = document.getElementById('prediction-max-value');
+      if (minPrice != null && typeof minPrice === 'number') {
+        minEl.textContent = minPrice.toFixed(2) + ' €';
+        minEl.classList.add('success');
+      } else {
+        minEl.textContent = '–';
+        minEl.classList.remove('success');
+      }
+      if (maxPrice != null && typeof maxPrice === 'number') {
+        maxEl.textContent = maxPrice.toFixed(2) + ' €';
+        maxEl.classList.add('accent');
+      } else {
+        maxEl.textContent = '–';
+        maxEl.classList.remove('accent');
+      }
     }
 
     (async () => {
       try {
         await loadStationsInfo();
         const stations = await getStations();
-        fillSelects(stations);
+        fillStationPicker(stations);
       } catch (e) {
         document.getElementById('chart-error').textContent = e.message || 'API nicht erreichbar.';
       }
