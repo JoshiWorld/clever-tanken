@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    image: clever-tanken:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./stations:/app/stations
+    restart: unless-stopped

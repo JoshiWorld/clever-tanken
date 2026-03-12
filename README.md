@@ -200,11 +200,42 @@ Für stabiles Training mit 2 Wochen im 10-Min-Takt (ca. 2000+ Punkte) bist du da
 
 ---
 
+## Docker
+
+Aus dem Projektverzeichnis ein Image bauen und die API in einem Container starten:
+
+```bash
+docker build -t clever-tanken .
+docker run -p 8000:8000 \
+  -e INFLUX_HOST="http://host.docker.internal:8181" \
+  -e INFLUX_TOKEN="dein-token" \
+  -e INFLUX_DATABASE="tankpreise" \
+  -v "$(pwd)/stations:/app/stations" \
+  clever-tanken
+```
+
+- **Umgebungsvariablen:** Alle Werte aus `.env` (z. B. `INFLUX_HOST`, `INFLUX_TOKEN`, `INFLUX_DATABASE`, `STATION_IDS`) per `-e` übergeben oder eine `.env`-Datei mit `--env-file .env` übergeben.
+- **Trainierte Modelle:** Mit `-v $(pwd)/stations:/app/stations` den Ordner `stations/` von außen einbinden, damit die API die trainierten Modelle nutzen kann.
+- **InfluxDB vom Host:** Unter Windows/Mac oft `http://host.docker.internal:8181`, unter Linux ggf. die echte Host-IP oder ein gemeinsames Netzwerk mit dem InfluxDB-Container.
+
+Im Browser: **http://localhost:8000**
+
+Mit **Docker Compose** (vorher `.env` anlegen):
+
+```bash
+docker compose up -d
+```
+
+---
+
 ## Kurzreferenz: Wichtige Befehle
 
 | Aktion | Befehl |
 |--------|--------|
 | Abhängigkeiten installieren | `pip install -r requirements.txt` |
+| **Docker-Image bauen** | `docker build -t clever-tanken .` |
+| **Container starten (mit Volume für Modelle)** | `docker run -p 8000:8000 -e INFLUX_HOST=… -e INFLUX_TOKEN=… -e INFLUX_DATABASE=… -v $(pwd)/stations:/app/stations clever-tanken` |
+| **Mit Docker Compose** | `docker compose up -d` (erwartet `.env` und bindet `./stations` ein) |
 | Preise von Clever-Tanken holen (Cron) | `python fetch_petrol_data.py` |
 | CSV in InfluxDB importieren | `python import_data.py --file prices.csv --station 993 --fuel "ARAL Ultimate 102"` |
 | Modell trainieren (alle Stationen/Sprit) | `python train.py` |

@@ -1,0 +1,29 @@
+# Git und IDE
+.git
+.gitignore
+.venv
+venv
+env
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Lokale Konfiguration (wird per Volume oder -e übergeben)
+.env
+.env.*
+!.env.example
+
+# Große/empfindliche Daten
+*.csv
+stations/
+
+# Docs (optional im Image)
+*.md
+!README.md
+
+# Docker-Kontext
+Dockerfile
+.dockerignore
+docker-compose*.yml
