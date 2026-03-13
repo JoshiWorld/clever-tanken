@@ -14,5 +14,13 @@
     "adresse": "Bremer Str. 69",
     "plz": "30826",
     "ort": "Garbsen"
+  },
+  {
+    "id": 14638,
+    "name": "STAR Tankstelle",
+    "standort": "Clever-Tanken Station 14638",
+    "adresse": "Osterwalder Str. 10",
+    "plz": "30827",
+    "ort": "Garbsen"
   }
 ]
