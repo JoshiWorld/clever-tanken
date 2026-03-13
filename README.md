@@ -17,9 +17,12 @@ clever-tanken/
 ├── train.py                # Training: InfluxDB → Features → Modell pro Station/Sprit
 ├── api.py                  # FastAPI: Endpoints + Auslieferung des Frontends
 │
+├── data/
+│   └── stations.db        # SQLite: Tankstellen (id, name, standort, adresse, plz, ort)
+├── db.py                  # SQLite-Zugriff für Tankstellen (CRUD)
 ├── static/
-│   ├── index.html          # Web-Frontend (Diagramm, Dropdowns, Light/Dark)
-│   └── stations.json       # Namen/Adressen der Stationen für die Anzeige
+│   ├── index.html         # Web-Frontend (Diagramm, Dropdowns, Light/Dark)
+│   └── admin.html         # Admin-Seite: Tankstellen bearbeiten/löschen/hinzufügen (Passwort aus env)
 │
 └── stations/               # Trainierte Modelle (nach dem ersten Training)
     └── <station_id>/
@@ -68,7 +71,11 @@ In der `.env` mindestens setzen:
 - **INFLUX_HOST** – z. B. `http://192.168.178.52:8181` (ohne TLS) oder `https://…` (mit TLS)
 - **INFLUX_TOKEN** – dein InfluxDB-Datenbank-Token
 - **INFLUX_DATABASE** – Name der Datenbank (z. B. `tankpreise`)
-- **STATION_IDS** – Tankstellen-IDs für den Abruf, kommagetrennt (z. B. `993`)
+- **ADMIN_PASSWORD** – Passwort für die Admin-Seite unter `/admin` (Tankstellen verwalten)
+
+Die Tankstellen-IDs für `fetch_petrol_data.py` kommen aus der **SQLite-DB** (`data/stations.db`). Beim ersten Start füllt die API die DB automatisch aus `static/stations.json`, falls die Tabelle leer ist. Über `/admin` können Tankstellen hinzugefügt, bearbeitet und gelöscht werden.
+
+Optional: **STATIONS_DB** – Pfad zur SQLite-Datei (Standard: `data/stations.db`).
 
 Alle weiteren Optionen (Tabelle, Spaltennamen, Training) stehen in `.env.example` und können bei Bedarf angepasst werden.
 
@@ -141,22 +148,7 @@ Dort: Station und Kraftstoffsorte wählen → Anzeige der letzten 24 h Ist-Preis
 
 ### Stationen im Frontend mit Namen und Adresse
 
-In `static/stations.json` können pro Station Anzeigename, Standort, Adresse, PLZ und Ort hinterlegt werden. Das Feld `id` muss der Clever-Tanken-Stationsnummer entsprechen. Fehlt ein Eintrag, erscheint nur „Station &lt;id&gt;“.
-
-Beispiel:
-
-```json
-[
-  {
-    "id": 993,
-    "name": "ARAL Tankstelle Musterstadt",
-    "standort": "Zentrum",
-    "adresse": "Hauptstraße 1",
-    "plz": "12345",
-    "ort": "Musterstadt"
-  }
-]
-```
+Die Anzeigenamen und Adressen kommen aus der **SQLite-DB** (`data/stations.db`). Unter **/admin** (Passwort aus `ADMIN_PASSWORD` in der `.env`) können Tankstellen angelegt, bearbeitet und gelöscht werden. Die `id` ist die Clever-Tanken-Stationsnummer. Fehlt ein Eintrag, erscheint nur „Station &lt;id&gt;“.
 
 ### InfluxDB 3 Core: Parquet-File-Limit
 
@@ -214,7 +206,7 @@ docker run -p 8000:8000 \
   clever-tanken
 ```
 
-- **Umgebungsvariablen:** Alle Werte aus `.env` (z. B. `INFLUX_HOST`, `INFLUX_TOKEN`, `INFLUX_DATABASE`, `STATION_IDS`) per `-e` übergeben oder eine `.env`-Datei mit `--env-file .env` übergeben.
+- **Umgebungsvariablen:** Alle Werte aus `.env` (z. B. `INFLUX_HOST`, `INFLUX_TOKEN`, `INFLUX_DATABASE`, `ADMIN_PASSWORD`) per `-e` übergeben oder eine `.env`-Datei mit `--env-file .env` übergeben. Tankstellen-IDs kommen aus der SQLite-DB; das Volume `data/` sollte gemountet werden, damit die DB persistent ist.
 - **Trainierte Modelle:** Mit `-v $(pwd)/stations:/app/stations` den Ordner `stations/` von außen einbinden, damit die API die trainierten Modelle nutzen kann.
 - **InfluxDB vom Host:** Unter Windows/Mac oft `http://host.docker.internal:8181`, unter Linux ggf. die echte Host-IP oder ein gemeinsames Netzwerk mit dem InfluxDB-Container.
 

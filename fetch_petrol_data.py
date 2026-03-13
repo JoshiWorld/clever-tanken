@@ -221,7 +221,7 @@ def main(station_ids: list[int]) -> int:
     Returns: 0 bei Erfolg, 1 bei Fehlern (z. B. keine Stationen, Schreibfehler).
     """
     if not station_ids:
-        print("Keine Station-IDs angegeben (--station oder STATION_IDS in .env).", file=sys.stderr)
+        print("Keine Station-IDs angegeben (--station oder Einträge in der SQLite-DB).", file=sys.stderr)
         return 1
 
     total_written = 0
@@ -247,16 +247,14 @@ def main(station_ids: list[int]) -> int:
     return 0
 
 
-def parse_station_ids_from_env() -> list[int]:
-    raw = os.getenv("STATION_IDS", "").strip()
-    if not raw:
+def get_station_ids_from_db() -> list[int]:
+    """Tankstellen-IDs aus der SQLite-DB (data/stations.db)."""
+    try:
+        import db
+        return db.get_station_ids()
+    except Exception as e:
+        print(f"Hinweis: Stationen konnten nicht aus der DB geladen werden: {e}", file=sys.stderr)
         return []
-    ids = []
-    for part in raw.replace(",", " ").split():
-        part = part.strip()
-        if part.isdigit():
-            ids.append(int(part))
-    return ids
 
 
 if __name__ == "__main__":
@@ -269,10 +267,15 @@ if __name__ == "__main__":
         action="append",
         dest="stations",
         metavar="ID",
-        help="Tankstellen-ID (mehrfach möglich, z. B. --station 993 --station 1000).",
+        help="Tankstellen-ID (mehrfach möglich, z. B. --station 993 --station 1000). Ohne Angabe: alle IDs aus der SQLite-DB.",
     )
     args = parser.parse_args()
 
-    station_ids = args.stations or parse_station_ids_from_env()
-    exit_code = main(station_ids)
+    station_ids = args.stations or get_station_ids_from_db()
+    if not station_ids:
+        print(
+            "Keine Station-IDs: weder --station angegeben noch Einträge in der SQLite-DB (data/stations.db).",
+            file=sys.stderr,
+        )
+    exit_code = main(station_ids) if station_ids else 1
     sys.exit(exit_code)

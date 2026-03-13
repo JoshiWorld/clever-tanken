@@ -469,7 +469,7 @@
 
     async function loadStationsInfo() {
       try {
-        const r = await fetch(API + '/static/stations.json');
+        const r = await fetch(API + '/api/stations-info');
         if (!r.ok) return;
         const list = await r.json();
         if (Array.isArray(list)) list.forEach(s => { stationsInfoById[String(s.id)] = s; });

@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin – Tankstellen</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #08090c;
+      --surface: rgba(18, 20, 26, 0.7);
+      --surface-solid: #13161d;
+      --border: rgba(255, 255, 255, 0.06);
+      --text: #f4f5f7;
+      --text-soft: #9ca3af;
+      --muted: #6b7280;
+      --accent: #6366f1;
+      --danger: #ef4444;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem;
+      min-height: 100vh;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { margin: 0 0 1.5rem 0; font-size: 1.5rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .login-box {
+      background: var(--surface-solid);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      max-width: 360px;
+    }
+    .login-box input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font: inherit;
+    }
+    .login-box button {
+      padding: 0.6rem 1.2rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      font: inherit;
+      cursor: pointer;
+    }
+    .login-box button:hover { opacity: 0.9; }
+    .login-error { color: var(--danger); font-size: 0.9rem; margin-top: 0.5rem; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem; }
+    .btn {
+      padding: 0.5rem 1rem;
+      border-radius: var(--radius-sm);
+      font: inherit;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-secondary { background: var(--surface-solid); color: var(--text); border: 1px solid var(--border); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface-solid);
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255,255,255,0.04); color: var(--text-soft); font-weight: 500; font-size: 0.85rem; }
+    tr:last-child td { border-bottom: none; }
+    .actions { display: flex; gap: 0.5rem; }
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    .modal {
+      background: var(--surface-solid);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 420px;
+    }
+    .modal h2 { margin: 0 0 1rem 0; font-size: 1.2rem; }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; margin-bottom: 0.35rem; color: var(--text-soft); font-size: 0.9rem; }
+    .form-group input {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font: inherit;
+    }
+    .form-group input:read-only { opacity: 0.7; }
+    .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.25rem; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="login-view" class="login-box">
+      <h1>Admin-Login</h1>
+      <form id="login-form">
+        <input type="password" id="password" placeholder="Passwort" autocomplete="current-password" required>
+        <button type="submit">Anmelden</button>
+      </form>
+      <div id="login-error" class="login-error hidden"></div>
+    </div>
+
+    <div id="admin-view" class="hidden">
+      <h1>Tankstellen verwalten</h1>
+      <p style="color: var(--text-soft); margin-bottom: 1rem;"><a href="/">← Zurück zur App</a></p>
+      <div class="toolbar">
+        <span style="color: var(--text-soft);" id="station-count">0 Tankstellen</span>
+        <button type="button" class="btn btn-primary" id="btn-add">+ Tankstelle hinzufügen</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Adresse</th>
+            <th>PLZ</th>
+            <th>Ort</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="stations-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <h2 id="modal-title">Tankstelle bearbeiten</h2>
+      <form id="station-form">
+        <div class="form-group">
+          <label>ID (Clever-Tanken-Nummer)</label>
+          <input type="number" id="form-id" required min="1" readonly>
+        </div>
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="form-name" placeholder="z. B. ARAL Tankstelle">
+        </div>
+        <div class="form-group">
+          <label>Standort</label>
+          <input type="text" id="form-standort" placeholder="z. B. Clever-Tanken Station 993">
+        </div>
+        <div class="form-group">
+          <label>Adresse</label>
+          <input type="text" id="form-adresse" placeholder="Straße und Hausnummer">
+        </div>
+        <div class="form-group">
+          <label>PLZ</label>
+          <input type="text" id="form-plz" placeholder="PLZ">
+        </div>
+        <div class="form-group">
+          <label>Ort</label>
+          <input type="text" id="form-ort" placeholder="Ort">
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-cancel">Abbrechen</button>
+          <button type="submit" class="btn btn-primary">Speichern</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const API = '';
+    const STORAGE_KEY = 'clever-tanken-admin-pw';
+
+    function getPassword() {
+      return sessionStorage.getItem(STORAGE_KEY);
+    }
+    function setPassword(pw) {
+      sessionStorage.setItem(STORAGE_KEY, pw || '');
+    }
+
+    function authHeaders() {
+      const pw = getPassword();
+      return pw ? { 'X-Admin-Password': pw } : {};
+    }
+
+    async function checkAuth() {
+      const res = await fetch(API + '/api/admin/stations', { headers: authHeaders() });
+      return res.ok;
+    }
+
+    async function loadStations() {
+      const res = await fetch(API + '/api/admin/stations', { headers: authHeaders() });
+      if (!res.ok) {
+        if (res.status === 401) {
+          setPassword('');
+          showLogin();
+          return [];
+        }
+        throw new Error(res.statusText);
+      }
+      return res.json();
+    }
+
+    function showLogin() {
+      document.getElementById('login-view').classList.remove('hidden');
+      document.getElementById('admin-view').classList.add('hidden');
+    }
+    function showAdmin() {
+      document.getElementById('login-view').classList.add('hidden');
+      document.getElementById('admin-view').classList.remove('hidden');
+    }
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const btn = form.querySelector('button[type="submit"]');
+      const errEl = document.getElementById('login-error');
+      errEl.classList.add('hidden');
+      errEl.textContent = '';
+
+      const pw = document.getElementById('password').value.trim();
+      if (!pw) {
+        errEl.textContent = 'Bitte Passwort eingeben.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Wird angemeldet…';
+      try {
+        setPassword(pw);
+        const res = await fetch(API + '/api/admin/stations', { headers: authHeaders() });
+        if (res.ok) {
+          showAdmin();
+          renderStations(await loadStations());
+          return;
+        }
+        setPassword('');
+        if (res.status === 503) {
+          errEl.textContent = 'Admin-Zugang nicht konfiguriert (ADMIN_PASSWORD in .env fehlt).';
+        } else if (res.status === 401) {
+          errEl.textContent = 'Ungültiges Passwort.';
+        } else {
+          errEl.textContent = 'Anmeldung fehlgeschlagen (Fehler ' + res.status + ').';
+        }
+        errEl.classList.remove('hidden');
+      } catch (err) {
+        setPassword('');
+        errEl.textContent = 'Netzwerkfehler: ' + (err.message || 'Bitte Konsole prüfen.');
+        errEl.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Anmelden';
+      }
+    });
+
+    function renderStations(list) {
+      document.getElementById('station-count').textContent = list.length + ' Tankstelle(n)';
+      const tbody = document.getElementById('stations-tbody');
+      tbody.innerHTML = '';
+      list.forEach(s => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + escapeHtml(String(s.id)) + '</td>' +
+          '<td>' + escapeHtml(s.name || '') + '</td>' +
+          '<td>' + escapeHtml(s.adresse || '') + '</td>' +
+          '<td>' + escapeHtml(s.plz || '') + '</td>' +
+          '<td>' + escapeHtml(s.ort || '') + '</td>' +
+          '<td class="actions">' +
+            '<button type="button" class="btn btn-secondary" data-edit="' + s.id + '">Bearbeiten</button>' +
+            '<button type="button" class="btn btn-danger" data-delete="' + s.id + '">Löschen</button>' +
+          '</td>';
+        tbody.appendChild(tr);
+      });
+      tbody.querySelectorAll('[data-edit]').forEach(btn => {
+        btn.addEventListener('click', () => openModal(Number(btn.getAttribute('data-edit'))));
+      });
+      tbody.querySelectorAll('[data-delete]').forEach(btn => {
+        btn.addEventListener('click', () => deleteStation(Number(btn.getAttribute('data-delete'))));
+      });
+    }
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    let editingId = null;
+    async function openModal(stationId) {
+      editingId = stationId;
+      document.getElementById('modal-title').textContent = stationId ? 'Tankstelle bearbeiten' : 'Tankstelle hinzufügen';
+      document.getElementById('form-id').readOnly = !!stationId;
+      document.getElementById('form-id').value = stationId || '';
+      if (stationId) {
+        try {
+          const res = await fetch(API + '/api/admin/stations/' + stationId, { headers: authHeaders() });
+          if (!res.ok) return;
+          const s = await res.json();
+          document.getElementById('form-name').value = s.name || '';
+          document.getElementById('form-standort').value = s.standort || '';
+          document.getElementById('form-adresse').value = s.adresse || '';
+          document.getElementById('form-plz').value = s.plz || '';
+          document.getElementById('form-ort').value = s.ort || '';
+        } catch (_) { return; }
+      } else {
+        document.getElementById('form-name').value = '';
+        document.getElementById('form-standort').value = '';
+        document.getElementById('form-adresse').value = '';
+        document.getElementById('form-plz').value = '';
+        document.getElementById('form-ort').value = '';
+      }
+      document.getElementById('modal-overlay').classList.remove('hidden');
+    }
+    function closeModal() {
+      document.getElementById('modal-overlay').classList.add('hidden');
+      editingId = null;
+    }
+
+    document.getElementById('btn-add').addEventListener('click', () => {
+      editingId = null;
+      document.getElementById('modal-title').textContent = 'Tankstelle hinzufügen';
+      document.getElementById('form-id').readOnly = false;
+      document.getElementById('form-id').value = '';
+      document.getElementById('form-name').value = '';
+      document.getElementById('form-standort').value = '';
+      document.getElementById('form-adresse').value = '';
+      document.getElementById('form-plz').value = '';
+      document.getElementById('form-ort').value = '';
+      document.getElementById('modal-overlay').classList.remove('hidden');
+    });
+    document.getElementById('btn-cancel').addEventListener('click', closeModal);
+
+    document.getElementById('station-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = Number(document.getElementById('form-id').value);
+      const payload = {
+        id,
+        name: document.getElementById('form-name').value.trim(),
+        standort: document.getElementById('form-standort').value.trim(),
+        adresse: document.getElementById('form-adresse').value.trim(),
+        plz: document.getElementById('form-plz').value.trim(),
+        ort: document.getElementById('form-ort').value.trim(),
+      };
+      try {
+        if (editingId != null) {
+          await fetch(API + '/api/admin/stations/' + editingId, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({
+              name: payload.name || null,
+              standort: payload.standort || null,
+              adresse: payload.adresse || null,
+              plz: payload.plz || null,
+              ort: payload.ort || null,
+            }),
+          });
+        } else {
+          const res = await fetch(API + '/api/admin/stations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.detail || 'Fehler beim Anlegen.');
+            return;
+          }
+        }
+        closeModal();
+        renderStations(await loadStations());
+      } catch (err) {
+        alert(err.message || 'Fehler');
+      }
+    });
+
+    async function deleteStation(id) {
+      if (!confirm('Tankstelle ' + id + ' wirklich löschen?')) return;
+      try {
+        const res = await fetch(API + '/api/admin/stations/' + id, {
+          method: 'DELETE',
+          headers: authHeaders(),
+        });
+        if (!res.ok) {
+          if (res.status === 401) { setPassword(''); showLogin(); return; }
+          alert('Löschen fehlgeschlagen.');
+          return;
+        }
+        renderStations(await loadStations());
+      } catch (err) {
+        alert(err.message || 'Fehler');
+      }
+    }
+
+    (async function init() {
+      if (getPassword()) {
+        const ok = await checkAuth();
+        if (ok) {
+          showAdmin();
+          renderStations(await loadStations());
+        } else {
+          setPassword('');
+        }
+      }
+    })();
+  </script>
+</body>
+</html>

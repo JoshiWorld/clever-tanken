@@ -12,8 +12,10 @@ Endpoints:
 from __future__ import annotations
 
 import os
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Optional, Union
 
 try:
     from dotenv import load_dotenv
@@ -21,10 +23,13 @@ try:
 except ImportError:
     pass
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import db
 
 # Train-Logik wiederverwenden (Influx, Modell, Vorhersage)
 from train import (
@@ -45,8 +50,30 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 
-def _has_model(station_id: int | str, fuel_type: str) -> bool:
+
+def require_admin(x_admin_password: Optional[str] = Header(None, alias="X-Admin-Password")):
+    """Dependency: erfordert gültiges Admin-Passwort aus der Umgebung."""
+    if not ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="Admin-Zugang nicht konfiguriert (ADMIN_PASSWORD).")
+    if x_admin_password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Ungültiges Passwort.")
+
+
+@app.on_event("startup")
+def startup():
+    """Beim Start: DB initialisieren und ggf. aus stations.json befüllen."""
+    db.init_db()
+    if not db.get_all_stations():
+        json_path = Path(__file__).resolve().parent / "static" / "stations.json"
+        if json_path.exists():
+            n = db.seed_from_json_file(json_path)
+            if n:
+                print(f"DB: {n} Tankstellen aus static/stations.json übernommen.")
+
+
+def _has_model(station_id: Union[int, str], fuel_type: str) -> bool:
     """Prüft, ob für (station_id, fuel_type) ein KI-Modell existiert."""
     path = station_model_dir(station_id, fuel_type) / "tankpreis_model.joblib"
     return path.exists()
@@ -91,6 +118,12 @@ def get_available_stations() -> list[dict]:
 def api_stations():
     """Liste aller Stationen + Kraftstoffsorten (mit Ist-Daten); has_model zeigt, ob Vorhersage verfügbar ist."""
     return {"stations": get_available_stations()}
+
+
+@app.get("/api/stations-info")
+def api_stations_info():
+    """Statische Tankstellendaten aus der SQLite-DB (Name, Adresse, PLZ, Ort usw.)."""
+    return db.get_all_stations()
 
 
 WEEKDAY_DE = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
@@ -289,6 +322,90 @@ def api_best_time(
         ] if not by_hour.empty else [],
         "best_time_past": best_time_past,
     }
+
+
+# --- Admin (Passwort aus env) ---
+
+class StationCreate(BaseModel):
+    id: int
+    name: str = ""
+    standort: str = ""
+    adresse: str = ""
+    plz: str = ""
+    ort: str = ""
+
+
+class StationUpdate(BaseModel):
+    name: Optional[str] = None
+    standort: Optional[str] = None
+    adresse: Optional[str] = None
+    plz: Optional[str] = None
+    ort: Optional[str] = None
+
+
+@app.get("/admin")
+def admin_page():
+    """Admin-Seite für Tankstellenverwaltung (Login auf der Seite)."""
+    admin_path = STATIC_DIR / "admin.html"
+    if admin_path.exists():
+        return FileResponse(admin_path, media_type="text/html")
+    raise HTTPException(status_code=404, detail="admin.html nicht gefunden.")
+
+
+@app.get("/api/admin/stations", dependencies=[Depends(require_admin)])
+def admin_list_stations():
+    """Alle Tankstellen (Admin)."""
+    return db.get_all_stations()
+
+
+@app.get("/api/admin/stations/{station_id}", dependencies=[Depends(require_admin)])
+def admin_get_station(station_id: int):
+    """Eine Tankstelle (Admin)."""
+    station = db.get_station(station_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station nicht gefunden.")
+    return station
+
+
+@app.post("/api/admin/stations", dependencies=[Depends(require_admin)])
+def admin_create_station(body: StationCreate):
+    """Tankstelle anlegen."""
+    try:
+        station = db.create_station(
+            station_id=body.id,
+            name=body.name,
+            standort=body.standort,
+            adresse=body.adresse,
+            plz=body.plz,
+            ort=body.ort,
+        )
+        return station
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Station mit ID {body.id} existiert bereits.")
+
+
+@app.put("/api/admin/stations/{station_id}", dependencies=[Depends(require_admin)])
+def admin_update_station(station_id: int, body: StationUpdate):
+    """Tankstelle aktualisieren."""
+    updated = db.update_station(
+        station_id,
+        name=body.name,
+        standort=body.standort,
+        adresse=body.adresse,
+        plz=body.plz,
+        ort=body.ort,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Station nicht gefunden.")
+    return updated
+
+
+@app.delete("/api/admin/stations/{station_id}", dependencies=[Depends(require_admin)])
+def admin_delete_station(station_id: int):
+    """Tankstelle löschen."""
+    if not db.delete_station(station_id):
+        raise HTTPException(status_code=404, detail="Station nicht gefunden.")
+    return {"ok": True}
 
 
 @app.get("/")
