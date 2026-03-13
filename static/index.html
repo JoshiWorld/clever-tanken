@@ -485,6 +485,8 @@
 
     let byStation = {};
     let allStationIds = [];
+    /** Für jede (station_id, fuel_type) ob ein KI-Modell existiert: key = sid + '|' + fuel_type */
+    let hasModelByStationFuel = {};
 
     function getStationSearchText(sid) {
       const info = stationsInfoById[String(sid)];
@@ -524,9 +526,12 @@
 
     function fillStationPicker(stations) {
       byStation = {};
+      hasModelByStationFuel = {};
       stations.forEach(s => {
-        if (!byStation[s.station_id]) byStation[s.station_id] = [];
-        byStation[s.station_id].push(s.fuel_type);
+        const sid = String(s.station_id);
+        if (!byStation[sid]) byStation[sid] = [];
+        byStation[sid].push(s.fuel_type);
+        hasModelByStationFuel[sid + '|' + s.fuel_type] = !!s.has_model;
       });
       allStationIds = Object.keys(byStation).sort((a, b) => Number(a) - Number(b));
       renderStationList('');
@@ -587,6 +592,8 @@
       if (extra) Object.keys(extra).forEach(k => p.set(k, String(extra[k])));
       return p.toString();
     }
+    const NO_PREDICTION_MSG = 'Noch keine Vorhersage verfügbar, da noch nicht genügend Daten gesammelt wurden.';
+
     async function updateData() {
       const sid = document.getElementById('station').value;
       const fuel = document.getElementById('fuel').value;
@@ -597,19 +604,26 @@
         if (chart) chart.update('none');
         return;
       }
+      const hasModel = hasModelByStationFuel[sid + '|' + fuel];
       try {
-        const [pricesRes, predRes, bestRes] = await Promise.all([
+        const fetches = [
           fetch(API + '/api/prices?' + apiParams(sid, fuel, { hours: 24 })),
-          fetch(API + '/api/prediction?' + apiParams(sid, fuel, { horizon: 24 }), { cache: 'no-store' }),
           fetch(API + '/api/best-time?' + apiParams(sid, fuel)),
-        ]);
+        ];
+        if (hasModel) {
+          fetches.push(fetch(API + '/api/prediction?' + apiParams(sid, fuel, { horizon: 24 }), { cache: 'no-store' }));
+        }
+        const results = await Promise.all(fetches);
+        const pricesRes = results[0];
+        const bestRes = results[1];
+        const predRes = hasModel ? results[2] : null;
+
         const pricesJson = await pricesRes.json();
-        const predJson = predRes.ok ? await predRes.json() : null;
+        const predJson = predRes && predRes.ok ? await predRes.json() : null;
         const bestJson = bestRes.ok ? await bestRes.json() : null;
 
         const data = (pricesJson.data || []).map(d => ({ x: new Date(d.time), y: d.price }));
         const points = (predJson && predJson.points) || [];
-        const predPrice = predJson && predJson.predicted_price != null ? predJson.predicted_price : null;
         const predPoint = points.map(d => ({ x: new Date(d.time), y: d.price }));
 
         if (bestJson) {
@@ -619,11 +633,13 @@
         } else {
           setBestTime('–', '');
         }
-        if (predPoint.length > 0) {
+        if (hasModel && predPoint.length > 0) {
           const prices = predPoint.map(d => d.y);
           const minP = Math.min(...prices);
           const maxP = Math.max(...prices);
           setPredictionMinMax(minP, maxP);
+        } else if (!hasModel) {
+          setPredictionMinMaxMessage(NO_PREDICTION_MSG);
         } else {
           setPredictionMinMax(null, null);
         }
@@ -718,20 +734,38 @@
     function setPredictionMinMax(minPrice, maxPrice) {
       const minEl = document.getElementById('prediction-min-value');
       const maxEl = document.getElementById('prediction-max-value');
+      const minHint = document.getElementById('prediction-min-hint');
+      const maxHint = document.getElementById('prediction-max-hint');
       if (minPrice != null && typeof minPrice === 'number') {
         minEl.textContent = minPrice.toFixed(2) + ' €';
         minEl.classList.add('success');
+        minHint.textContent = 'Nächste 24 h';
       } else {
         minEl.textContent = '–';
         minEl.classList.remove('success');
+        minHint.textContent = 'Nächste 24 h';
       }
       if (maxPrice != null && typeof maxPrice === 'number') {
         maxEl.textContent = maxPrice.toFixed(2) + ' €';
         maxEl.classList.add('accent');
+        maxHint.textContent = 'Nächste 24 h';
       } else {
         maxEl.textContent = '–';
         maxEl.classList.remove('accent');
+        maxHint.textContent = 'Nächste 24 h';
       }
+    }
+    function setPredictionMinMaxMessage(msg) {
+      const minEl = document.getElementById('prediction-min-value');
+      const maxEl = document.getElementById('prediction-max-value');
+      const minHint = document.getElementById('prediction-min-hint');
+      const maxHint = document.getElementById('prediction-max-hint');
+      minEl.textContent = '–';
+      maxEl.textContent = '–';
+      minEl.classList.remove('success');
+      maxEl.classList.remove('accent');
+      minHint.textContent = msg;
+      maxHint.textContent = msg;
     }
 
     (async () => {

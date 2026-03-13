@@ -31,6 +31,7 @@ from train import (
     STATIONS_BASE_DIR,
     LOOKBACK_HOURS,
     LOOKBACK_PERIODS_10MIN,
+    get_station_fuel_combinations,
     load_tankpreise_from_influx,
     predict_from_current_prices,
     predict_next_144_steps,
@@ -45,28 +46,50 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+def _has_model(station_id: int | str, fuel_type: str) -> bool:
+    """Prüft, ob für (station_id, fuel_type) ein KI-Modell existiert."""
+    path = station_model_dir(station_id, fuel_type) / "tankpreis_model.joblib"
+    return path.exists()
+
+
 def get_available_stations() -> list[dict]:
-    """Ermittelt alle (station_id, fuel_type), für die ein Modell existiert."""
+    """Ermittelt alle (station_id, fuel_type) mit Ist-Daten aus Influx; has_model=True wenn Modell existiert."""
     result = []
-    base = Path(STATIONS_BASE_DIR)
-    if not base.exists():
-        return result
-    for station_dir in base.iterdir():
-        if not station_dir.is_dir():
-            continue
-        try:
-            sid = int(station_dir.name)
-        except ValueError:
-            sid = station_dir.name
-        for fuel_dir in station_dir.iterdir():
-            if fuel_dir.is_dir() and (fuel_dir / "tankpreis_model.joblib").exists():
-                result.append({"station_id": sid, "fuel_type": fuel_dir.name})
+    try:
+        # combinations = get_station_fuel_combinations(hours=24 * 365)  # alle mit Daten im letzten Jahr
+        combinations = get_station_fuel_combinations(hours=24)  # alle mit Daten der letzten 24 Stunden
+    except Exception:
+        # Fallback: nur Kombinationen mit existierendem Modell (bisheriges Verhalten)
+        base = Path(STATIONS_BASE_DIR)
+        if not base.exists():
+            return result
+        for station_dir in base.iterdir():
+            if not station_dir.is_dir():
+                continue
+            try:
+                sid = int(station_dir.name)
+            except ValueError:
+                sid = station_dir.name
+            for fuel_dir in station_dir.iterdir():
+                if fuel_dir.is_dir() and (fuel_dir / "tankpreis_model.joblib").exists():
+                    result.append({
+                        "station_id": sid,
+                        "fuel_type": fuel_dir.name,
+                        "has_model": True,
+                    })
+        return sorted(result, key=lambda x: (str(x["station_id"]), x["fuel_type"]))
+    for sid, fuel_type in combinations:
+        result.append({
+            "station_id": sid,
+            "fuel_type": fuel_type,
+            "has_model": _has_model(sid, fuel_type),
+        })
     return sorted(result, key=lambda x: (str(x["station_id"]), x["fuel_type"]))
 
 
 @app.get("/api/stations")
 def api_stations():
-    """Liste aller Stationen + Kraftstoffsorten mit trainiertem Modell."""
+    """Liste aller Stationen + Kraftstoffsorten (mit Ist-Daten); has_model zeigt, ob Vorhersage verfügbar ist."""
     return {"stations": get_available_stations()}
 
 
